@@ -1,8 +1,8 @@
 import ChatWidget from "./ui/ChatWidget";
+import LeadForm from "./ui/LeadForm";
 
 export default function HomePage() {
   const stripeLink = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK || "";
-
   return (
     <main className="min-h-screen bg-slate-950 text-white grid place-items-center p-10">
       <div className="max-w-2xl text-center">
@@ -12,13 +12,9 @@ export default function HomePage() {
         </p>
 
         <div className="mt-6 flex gap-3 justify-center">
-          <a
-            href="/api/google/oauth/start"
-            className="rounded-xl bg-white/10 hover:bg-white/20 px-5 py-3 text-sm"
-          >
+          <a href="/api/google/oauth/start" className="rounded-xl bg-white/10 hover:bg-white/20 px-5 py-3 text-sm">
             Book a call
           </a>
-
           <a
             href={stripeLink || "#"}
             target="_blank"
@@ -34,6 +30,10 @@ export default function HomePage() {
             NEXT_PUBLIC_STRIPE_PAYMENT_LINK is missing in Production envs.
           </p>
         )}
+      </div>
+
+      <div className="mt-10 w-full">
+        <LeadForm />
       </div>
 
       <ChatWidget />
