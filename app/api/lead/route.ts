@@ -67,8 +67,9 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    console.error("Lead route error:", e?.message || e);
+  } catch (e: unknown) {
+    const err = e as Error;
+    console.error("Lead route error:", err.message || err);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

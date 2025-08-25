@@ -1,3 +1,4 @@
+import Link from "next/link";
 import ChatWidget from "./ui/ChatWidget";
 import LeadForm from "./ui/LeadForm";
 
@@ -12,9 +13,9 @@ export default function HomePage() {
         </p>
 
         <div className="mt-6 flex gap-3 justify-center">
-          <a href="/api/google/oauth/start" className="rounded-xl bg-white/10 hover:bg-white/20 px-5 py-3 text-sm">
+          <Link href="/api/google/oauth/start" className="rounded-xl bg-white/10 hover:bg-white/20 px-5 py-3 text-sm">
             Book a call
-          </a>
+          </Link>
           <a
             href={stripeLink || "#"}
             target="_blank"
