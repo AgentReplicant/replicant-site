@@ -2,12 +2,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-export const runtime = 'nodejs';        // Needed for raw body access
-export const dynamic = 'force-dynamic'; // Avoid caching
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: '2024-06-20',
+  apiVersion: '2025-07-30.basil', // <-- update made here
 });
+
+export async function GET() {
+  return NextResponse.json({ ok: true, endpoint: 'stripe/webhook' });
+}
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
+}
 
 export async function POST(req: NextRequest) {
   const sig = req.headers.get('stripe-signature');
@@ -16,10 +23,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Missing signature or secret' }, { status: 400 });
   }
 
-  // Stripe requires the **raw** bytes for signature verification
   const rawBody = Buffer.from(await req.arrayBuffer());
   let event: Stripe.Event;
-
   try {
     event = stripe.webhooks.constructEvent(rawBody, sig, whsec);
   } catch (err: any) {
@@ -28,12 +33,10 @@ export async function POST(req: NextRequest) {
 
   try {
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session;
-
-      // Basic details (extend later with metadata)
-      const email = session.customer_details?.email || session.customer_email || '';
-      const name = session.customer_details?.name || '';
-      const stripeSessionId = session.id;
+      const s = event.data.object as Stripe.Checkout.Session;
+      const email = s.customer_details?.email || s.customer_email || '';
+      const name = s.customer_details?.name || '';
+      const stripeSessionId = s.id;
 
       await maybeUpdateAirtable({ email, name, stripeSessionId });
       await maybeSendEmail({
@@ -42,7 +45,6 @@ export async function POST(req: NextRequest) {
         text: `New payment from ${name || email} (session ${stripeSessionId}).`,
       });
     }
-
     return NextResponse.json({ received: true });
   } catch (e: any) {
     console.error('Webhook handling error:', e);
@@ -57,21 +59,21 @@ async function maybeUpdateAirtable({
   const baseId = process.env.AIRTABLE_BASE_ID;
   if (!token || !baseId || !email) return;
 
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+
   try {
-    // Find latest Lead by email
     const list = await fetch(
       `https://api.airtable.com/v0/${baseId}/Leads?filterByFormula=${encodeURIComponent(`{Email}='${email}'`)}&maxRecords=1`,
-      { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }
+      { headers, cache: 'no-store' }
     ).then(r => r.json());
 
-    const recordId = list.records?.[0]?.id;
-    if (recordId) {
-      await fetch(`https://api.airtable.com/v0/${baseId}/Leads/${recordId}`, {
+    if (list.records?.[0]) {
+      await fetch(`https://api.airtable.com/v0/${baseId}/Leads/${list.records[0].id}`, {
         method: 'PATCH',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           fields: {
             Status: 'Paid',
@@ -80,9 +82,25 @@ async function maybeUpdateAirtable({
           },
         }),
       });
+    } else {
+      await fetch(`https://api.airtable.com/v0/${baseId}/Leads`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          records: [{
+            fields: {
+              Name: name || '',
+              Email: email,
+              Status: 'Paid',
+              StripePaymentId: stripeSessionId || '',
+              Source: 'stripe',
+            },
+          }],
+        }),
+      });
     }
   } catch (e) {
-    console.warn('Airtable update skipped/error:', e);
+    console.warn('Airtable upsert skipped/error:', e);
   }
 }
 
