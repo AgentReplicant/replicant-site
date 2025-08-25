@@ -11,12 +11,14 @@ const {
 const AIRTABLE_TABLE = process.env.AIRTABLE_GOOGLE_TABLE || "GoogleTokens";
 
 export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const origin = `${url.protocol}//${url.host}`; // use absolute redirects
+
   try {
-    const url = new URL(req.url);
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
-    if (error) return NextResponse.redirect("/success?google=err");
-    if (!code) return NextResponse.redirect("/success?google=missing_code");
+    if (error) return NextResponse.redirect(`${origin}/success?google=err`);
+    if (!code) return NextResponse.redirect(`${origin}/success?google=missing_code`);
 
     // 1) Exchange code -> tokens
     const body = new URLSearchParams({
@@ -25,7 +27,7 @@ export async function GET(req: Request) {
       client_secret: GOOGLE_CLIENT_SECRET || "",
       redirect_uri:
         GOOGLE_REDIRECT_URI ||
-        "https://replicant-site.vercel.app/api/google/oauth/callback",
+        `${origin}/api/google/oauth/callback`,
       grant_type: "authorization_code",
     });
 
@@ -35,14 +37,14 @@ export async function GET(req: Request) {
       body: body.toString(),
     });
 
+    const tokenText = await tokenRes.text();
     if (!tokenRes.ok) {
-      const t = await tokenRes.text();
-      console.error("Google token exchange failed:", t);
-      return NextResponse.redirect("/success?google=token_fail");
+      console.error("Google token exchange failed:", tokenRes.status, tokenText);
+      return NextResponse.redirect(`${origin}/success?google=token_fail`);
     }
 
-    const tokens = await tokenRes.json() as any;
-    // tokens = { access_token, expires_in, scope, token_type, refresh_token?, id_token? }
+    const tokens = JSON.parse(tokenText) as any;
+    // tokens: { access_token, expires_in, scope, token_type, refresh_token?, id_token? }
 
     // 2) Store to Airtable (optional)
     if (AIRTABLE_TOKEN && AIRTABLE_BASE_ID) {
@@ -75,14 +77,14 @@ export async function GET(req: Request) {
         );
       } catch (e) {
         console.error("Airtable save error:", e);
-        // Continue anyway — user is connected
+        // continue anyway
       }
     }
 
-    // 3) Send user back to the app
-    return NextResponse.redirect("/success?google=ok");
-  } catch (e) {
-    console.error("OAuth callback error:", e);
-    return NextResponse.redirect("/success?google=err");
+    // 3) Done → back to app
+    return NextResponse.redirect(`${origin}/success?google=ok`);
+  } catch (e: any) {
+    console.error("OAuth callback error:", e?.stack || e);
+    return NextResponse.redirect(`${origin}/success?google=err`);
   }
 }
