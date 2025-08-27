@@ -1,32 +1,25 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(request: Request) {
-  const { GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI } = process.env;
-  if (!GOOGLE_CLIENT_ID) {
-    return NextResponse.json({ error: "Missing GOOGLE_CLIENT_ID" }, { status: 500 });
-  }
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-  const origin = new URL(request.url).origin;
-  const redirect =
-    GOOGLE_REDIRECT_URI || `${origin}/api/google/oauth/callback`;
+export async function GET(_req: NextRequest) {
+  const clientId = process.env.GOOGLE_CLIENT_ID!;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI!;
+  const scope = encodeURIComponent('https://www.googleapis.com/auth/calendar.events');
+  const state = 'replicant_oauth_' + Math.random().toString(36).slice(2);
 
-  const scope = [
-    "openid",
-    "email",
-    "profile",
-    "https://www.googleapis.com/auth/calendar.events",
-  ].join(" ");
+  // access_type=offline + prompt=consent ensures a refresh_token the first time
+  const authUrl =
+    `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${encodeURIComponent(clientId)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&response_type=code` +
+    `&scope=${scope}` +
+    `&access_type=offline` +
+    `&include_granted_scopes=true` +
+    `&prompt=consent` +
+    `&state=${encodeURIComponent(state)}`;
 
-  const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: redirect,
-    response_type: "code",
-    access_type: "offline",
-    prompt: "consent",
-    scope,
-  });
-
-  return NextResponse.redirect(
-    `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
-  );
+  return NextResponse.redirect(authUrl);
 }
