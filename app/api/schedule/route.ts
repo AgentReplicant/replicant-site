@@ -5,17 +5,20 @@ export const dynamic = 'force-dynamic';
 
 type AirtableRecord = { id: string; fields: Record<string, any> };
 
+const AT_BASE = process.env.AIRTABLE_BASE_ID!;
+const AT_TOKEN = process.env.AIRTABLE_TOKEN!;
+const AT_HEADERS_JSON = {
+  Authorization: `Bearer ${AT_TOKEN}`,
+  'Content-Type': 'application/json',
+};
+
 async function getRefreshTokenFromAirtable() {
-  const token = process.env.AIRTABLE_TOKEN!;
-  const baseId = process.env.AIRTABLE_BASE_ID!;
-  const headers = { Authorization: `Bearer ${token}` };
-
-  const list = await fetch(
-    `https://api.airtable.com/v0/${baseId}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Name}='Google OAuth'`)}`,
-    { headers, cache: 'no-store' }
-  ).then(r => r.json());
-
-  const rec: AirtableRecord | undefined = list.records?.[0];
+  const res = await fetch(
+    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Name}="Google OAuth"`)}`,
+    { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
+  );
+  const json = await res.json();
+  const rec: AirtableRecord | undefined = json.records?.[0];
   if (!rec) return null;
   try {
     const msg = rec.fields.Message as string | undefined;
@@ -80,33 +83,44 @@ async function createCalendarEvent(accessToken: string, payload: {
   return res.json();
 }
 
-async function setAirtableAppointment(email: string | undefined, startISO: string) {
+async function upsertAirtableAppointment(email: string | undefined, startISO: string) {
   if (!email) return;
-  const token = process.env.AIRTABLE_TOKEN!;
-  const baseId = process.env.AIRTABLE_BASE_ID!;
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  };
 
-  // Find lead by email
+  // IMPORTANT: double quotes in the filterByFormula
   const list = await fetch(
-    `https://api.airtable.com/v0/${baseId}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Email}='${email}'`)}`,
-    { headers, cache: 'no-store' }
+    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Email}="${email}"`)}`,
+    { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
   ).then(r => r.json());
+
+  const fields = {
+    Email: email,
+    'Appointment Time': startISO,
+    Status: 'Booked',
+  };
 
   if (list.records?.[0]) {
     const rec: AirtableRecord = list.records[0];
-    await fetch(`https://api.airtable.com/v0/${baseId}/Leads/${rec.id}`, {
+    const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/Leads/${rec.id}`, {
       method: 'PATCH',
-      headers,
+      headers: AT_HEADERS_JSON,
+      body: JSON.stringify({ fields, typecast: true }), // typecast to allow "Booked"
+    });
+    if (!res.ok) {
+      throw new Error(`Airtable PATCH failed: ${await res.text()}`);
+    }
+  } else {
+    // If no existing lead for that email, create one
+    const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/Leads`, {
+      method: 'POST',
+      headers: AT_HEADERS_JSON,
       body: JSON.stringify({
-        fields: {
-          'Appointment Time': startISO,
-          Status: 'Booked',
-        },
+        records: [{ fields: { Name: email.split('@')[0], ...fields } }],
+        typecast: true,
       }),
     });
+    if (!res.ok) {
+      throw new Error(`Airtable CREATE failed: ${await res.text()}`);
+    }
   }
 }
 
@@ -136,8 +150,8 @@ export async function POST(req: NextRequest) {
       description,
     });
 
-    // Save back to Airtable
-    await setAirtableAppointment(email, start);
+    // Upsert into Airtable
+    await upsertAirtableAppointment(email, start);
 
     return NextResponse.json({
       ok: true,
