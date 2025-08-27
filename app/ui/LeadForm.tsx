@@ -1,113 +1,132 @@
-"use client";
+'use client';
 
-import { useState } from "react";
+import { useEffect, useState } from 'react';
 
 export default function LeadForm() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [notes, setNotes] = useState("");
+  const [utmJson, setUtmJson] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
-  const [ok, setOk] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<boolean | null>(null);
 
-  function isValidEmail(v: string) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
-  }
-
-  // very light permissive phone check; optional field
-  function isValidPhone(v: string) {
-    if (!v.trim()) return true; // optional
-    const cleaned = v.replace(/[^\d+().\-\s]/g, "");
-    return cleaned.length >= 7 && cleaned.length <= 20;
-  }
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    setOk(false);
-
-    if (!name.trim()) return setErr("Please enter your name.");
-    if (!isValidEmail(email)) return setErr("Please enter a valid email.");
-    if (!isValidPhone(phone)) return setErr("Please enter a valid phone (or leave it blank).");
-
-    setSubmitting(true);
+  // Collect UTM params from the URL and stash as JSON
+  useEffect(() => {
     try {
-      const res = await fetch("/api/lead", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          email: email.trim(),
-          phone: phone.trim() || undefined, // optional
-          notes: notes.trim() || "",
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || "Request failed");
+      const p = new URL(window.location.href).searchParams;
+      const utm = {
+        source: p.get('utm_source') || '',
+        medium: p.get('utm_medium') || '',
+        campaign: p.get('utm_campaign') || '',
+        term: p.get('utm_term') || '',
+        content: p.get('utm_content') || '',
+      };
+      if (Object.values(utm).some(Boolean)) {
+        setUtmJson(JSON.stringify(utm));
       }
+    } catch {
+      /* no-op */
+    }
+  }, []);
 
-      setOk(true);
-      setName("");
-      setEmail("");
-      setPhone("");
-      setNotes("");
-    } catch (e: any) {
-      setErr(e?.message || "Something went wrong. Try again.");
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setSubmitting(true);
+    setOk(null);
+
+    const form = e.currentTarget;
+    const fd = new FormData(form);
+    const payload: Record<string, any> = Object.fromEntries(fd.entries());
+
+    // attach UTM JSON (if present)
+    if (utmJson) payload.utm = utmJson;
+
+    try {
+      const res = await fetch('/api/lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({}));
+      setOk(res.ok && j?.ok !== false);
+      if (res.ok) form.reset();
+    } catch {
+      setOk(false);
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="mt-8 w-full max-w-2xl rounded-2xl bg-slate-900 p-6 shadow-xl ring-1 ring-slate-800">
-      <h3 className="mb-4 text-lg font-semibold text-white">Onboarding Form</h3>
-
-      <div className="space-y-4">
+    <form onSubmit={onSubmit} className="space-y-3">
+      {/* Name */}
+      <div>
+        <label className="block text-sm font-medium">Name</label>
         <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Name"
-          className="w-full rounded-md bg-slate-800 px-4 py-3 text-white outline-none ring-1 ring-slate-700 focus:ring-blue-500"
+          name="name"
+          required
+          className="mt-1 w-full rounded-md border px-3 py-2 bg-white/5 border-white/10"
+          placeholder="Jane Doe"
         />
-
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-          className="w-full rounded-md bg-slate-800 px-4 py-3 text-white outline-none ring-1 ring-slate-700 focus:ring-blue-500"
-        />
-
-        <input
-          type="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="Phone (optional)"
-          className="w-full rounded-md bg-slate-800 px-4 py-3 text-white outline-none ring-1 ring-slate-700 focus:ring-blue-500"
-        />
-
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Tell us about your business (optional)"
-          rows={4}
-          className="w-full rounded-md bg-slate-800 px-4 py-3 text-white outline-none ring-1 ring-slate-700 focus:ring-blue-500"
-        />
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-500 disabled:opacity-60"
-        >
-          {submitting ? "Submitting..." : "Submit"}
-        </button>
-
-        {ok && <p className="text-sm text-emerald-400">Thanks! We’ll reach out shortly.</p>}
-        {err && <p className="text-sm text-rose-400">{err}</p>}
       </div>
+
+      {/* Email */}
+      <div>
+        <label className="block text-sm font-medium">Email</label>
+        <input
+          name="email"
+          required
+          type="email"
+          className="mt-1 w-full rounded-md border px-3 py-2 bg-white/5 border-white/10"
+          placeholder="jane@example.com"
+        />
+      </div>
+
+      {/* Phone (optional) */}
+      <div>
+        <label className="block text-sm font-medium">Phone (optional)</label>
+        <input
+          name="phone"
+          className="mt-1 w-full rounded-md border px-3 py-2 bg-white/5 border-white/10"
+          placeholder="(555) 123-4567"
+        />
+      </div>
+
+      {/* Notes */}
+      <div>
+        <label className="block text-sm font-medium">Notes</label>
+        <textarea
+          name="notes"
+          rows={4}
+          className="mt-1 w-full rounded-md border px-3 py-2 bg-white/5 border-white/10"
+          placeholder="Tell us about your use case…"
+        />
+      </div>
+
+      {/* Honeypot (bots will fill this; humans never see it) */}
+      <input
+        type="text"
+        name="hp"
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-5000px', height: 0, width: 0, opacity: 0 }}
+      />
+
+      {/* UTM bundle (JSON) */}
+      <input type="hidden" name="utm" value={utmJson} />
+
+      <button
+        disabled={submitting}
+        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-white disabled:opacity-60"
+        type="submit"
+      >
+        {submitting ? 'Sending…' : 'Send'}
+      </button>
+
+      {ok === true && (
+        <p className="text-sm text-green-500">Thanks — we’ll reach out shortly.</p>
+      )}
+      {ok === false && (
+        <p className="text-sm text-red-400">Whoops — please try again in a moment.</p>
+      )}
     </form>
   );
 }

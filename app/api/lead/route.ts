@@ -1,113 +1,182 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 
-const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN!;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID!;
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
-const ADMIN_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || "";
-const SOURCE_LABEL = "Replicant site"; // must exist in Airtable's "Source" single-select options
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-type LeadPayload = {
-  name?: string;
-  email?: string;
-  phone?: string;
-  notes?: string;
-};
+/** -----------------------------
+ *  Simple in-memory rate limit
+ *  ----------------------------- */
+type Hit = { count: number; resetAt: number };
+const ipHits = new Map<string, Hit>();
+const RATE = { windowMs: 10 * 60 * 1000, max: 5 }; // 5 req / 10 min
 
-function isEmail(v: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+function ipFrom(req: NextRequest) {
+  const xf = req.headers.get('x-forwarded-for');
+  return (xf?.split(',')[0].trim() || req.headers.get('x-real-ip') || 'unknown');
+}
+function checkRate(ip: string) {
+  const now = Date.now();
+  const rec = ipHits.get(ip);
+  if (!rec || now > rec.resetAt) {
+    ipHits.set(ip, { count: 1, resetAt: now + RATE.windowMs });
+    return { allowed: true as const };
+  }
+  if (rec.count >= RATE.max) {
+    return { allowed: false as const, retryAfter: Math.ceil((rec.resetAt - now) / 1000) };
+  }
+  rec.count += 1;
+  return { allowed: true as const };
 }
 
-function isPhone(v?: string) {
-  if (!v) return true;
-  const cleaned = v.replace(/[^\d+().\-\s]/g, "");
-  return cleaned.length >= 7 && cleaned.length <= 20;
-}
-
-export async function POST(req: Request) {
+/** -----------------------------
+ *  Helpers
+ *  ----------------------------- */
+async function sendGridNotify(to: string, subject: string, text: string) {
+  const key = process.env.SENDGRID_API_KEY;
+  if (!key || !to) return;
   try {
-    const body: LeadPayload = await req.json();
+    await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: 'agentreplicant@gmail.com', name: 'Replicant' },
+        subject,
+        content: [{ type: 'text/plain', value: text }],
+      }),
+    });
+  } catch (e) {
+    console.warn('SendGrid notify skipped/error:', e);
+  }
+}
 
-    const name = (body.name || "").trim();
-    const email = (body.email || "").trim();
-    const phone = (body.phone || "").trim();
-    const notes = (body.notes || "").trim();
+async function airtableCreateLead({
+  name,
+  email,
+  phone,
+  message,
+  source = 'Replicant site',
+}: {
+  name: string;
+  email: string;
+  phone?: string;
+  message?: string;
+  source?: string;
+}) {
+  const token = process.env.AIRTABLE_TOKEN;
+  const baseId = process.env.AIRTABLE_BASE_ID;
+  if (!token || !baseId) throw new Error('Missing Airtable env');
 
-    if (!name) return NextResponse.json({ error: "Name required" }, { status: 400 });
-    if (!isEmail(email)) return NextResponse.json({ error: "Valid email required" }, { status: 400 });
-    if (!isPhone(phone)) return NextResponse.json({ error: "Invalid phone" }, { status: 400 });
-
-    // Build Airtable fields – field names MUST match your table
-    // Expected columns: Name (text), Email (email), Phone (phone), Message (long text), Source (single select)
-    const airtableFields: Record<string, any> = {
-      Name: name,
-      Email: email,
-      Message: notes,
-      Source: SOURCE_LABEL,
-    };
-
-    if (phone) airtableFields["Phone"] = phone;
-
-    const createRes = await fetch(
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Leads`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_TOKEN}`,
-          "Content-Type": "application/json",
+  const res = await fetch(`https://api.airtable.com/v0/${baseId}/Leads`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      records: [
+        {
+          fields: {
+            Name: name,
+            Email: email,
+            Phone: phone || '',
+            Message: message || '',
+            Source: source,
+          },
         },
-        body: JSON.stringify({
-          records: [{ fields: airtableFields }],
-          typecast: true, // allows single-select to accept existing option labels
-        }),
-        cache: "no-store",
-      }
-    );
+      ],
+    }),
+    cache: 'no-store',
+  });
 
-    const createJson = await createRes.json();
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Airtable error ${res.status}: ${txt}`);
+  }
+}
 
-    if (!createRes.ok) {
-      console.error("Airtable error:", createJson);
+/** -----------------------------
+ *  Route handler
+ *  ----------------------------- */
+export async function POST(req: NextRequest) {
+  try {
+    // Rate limit
+    const ip = ipFrom(req);
+    const rate = checkRate(ip);
+    if (!rate.allowed) {
       return NextResponse.json(
-        { error: "Airtable create failed", detail: createJson },
-        { status: 502 }
+        { ok: false, error: 'Too many requests' },
+        { status: 429, headers: { 'Retry-After': String(rate.retryAfter) } },
       );
     }
 
-    // Optional email notification via SendGrid
-    if (SENDGRID_API_KEY && ADMIN_EMAIL) {
+    // Read body (JSON or form)
+    let body: any = {};
+    const ct = req.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      body = await req.json();
+    } else if (ct.includes('application/x-www-form-urlencoded')) {
+      const form = await req.formData();
+      body = Object.fromEntries(form as any);
+    } else {
+      body = await req.json().catch(() => ({}));
+    }
+
+    const { name, email, phone, notes, utm: utmJson, hp } = body || {};
+
+    // Honeypot: if bots filled it, silently accept but do nothing
+    if (typeof hp === 'string' && hp.trim().length > 0) {
+      return NextResponse.json({ ok: true });
+    }
+
+    if (!name || !email) {
+      return NextResponse.json({ ok: false, error: 'Missing name or email' }, { status: 400 });
+    }
+
+    // Append UTM info into the message (no schema changes needed)
+    let utmText = '';
+    if (utmJson) {
       try {
-        await fetch("https://api.sendgrid.com/v3/mail/send", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SENDGRID_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            personalizations: [{ to: [{ email: ADMIN_EMAIL }] }],
-            from: { email: "no-reply@replicant.site", name: "Replicant Bot" },
-            subject: "New Replicant lead",
-            content: [
-              {
-                type: "text/plain",
-                value:
-                  `New lead\n\n` +
-                  `Name: ${name}\n` +
-                  `Email: ${email}\n` +
-                  (phone ? `Phone: ${phone}\n` : ``) +
-                  `Notes: ${notes || "(none)"}`,
-              },
-            ],
-          }),
-        });
-      } catch (e) {
-        // Non-fatal
-        console.warn("SendGrid error:", (e as Error).message);
+        const u = typeof utmJson === 'string' ? JSON.parse(utmJson) : utmJson;
+        const parts = [
+          u.source && `source=${u.source}`,
+          u.medium && `medium=${u.medium}`,
+          u.campaign && `campaign=${u.campaign}`,
+          u.term && `term=${u.term}`,
+          u.content && `content=${u.content}`,
+        ].filter(Boolean);
+        if (parts.length) utmText = `\nUTM: ${parts.join(', ')}`;
+      } catch {
+        /* ignore bad UTM JSON */
       }
+    }
+    const message: string = `${notes || ''}${utmText}`;
+
+    // Create Airtable record (maps notes -> Message; Source fixed)
+    await airtableCreateLead({ name, email, phone, message, source: 'Replicant site' });
+
+    // Optional email to admin
+    const admin = process.env.ADMIN_NOTIFY_EMAIL || '';
+    if (admin) {
+      await sendGridNotify(
+        admin,
+        `Replicant • New Lead ${email ? `(${email})` : ''}`,
+        [
+          'New lead',
+          `Name: ${name}`,
+          `Email: ${email}`,
+          phone ? `Phone: ${phone}` : '',
+          `Notes: ${notes || '(none)'}`,
+          utmText ? utmText.trim() : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
     }
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {
-    console.error("Lead route error:", err?.message || err);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    console.error('Lead route error:', err?.message || err);
+    return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
