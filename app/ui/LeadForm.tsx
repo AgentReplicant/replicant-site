@@ -3,11 +3,19 @@
 import { useEffect, useState } from 'react';
 
 export default function LeadForm() {
+  // UTM state (canonical fields)
+  const [utmSource, setUtmSource] = useState('');
+  const [utmMedium, setUtmMedium] = useState('');
+  const [utmCampaign, setUtmCampaign] = useState('');
+  const [utmTerm, setUtmTerm] = useState('');
+  const [utmContent, setUtmContent] = useState('');
+  // JSON bundle (back-compat / convenience)
   const [utmJson, setUtmJson] = useState<string>('');
+
   const [submitting, setSubmitting] = useState(false);
   const [ok, setOk] = useState<boolean | null>(null);
 
-  // Collect UTM params from the URL and stash as JSON
+  // Collect UTM params from the URL and stash as both canonical fields AND JSON
   useEffect(() => {
     try {
       const p = new URL(window.location.href).searchParams;
@@ -18,6 +26,13 @@ export default function LeadForm() {
         term: p.get('utm_term') || '',
         content: p.get('utm_content') || '',
       };
+
+      setUtmSource(utm.source);
+      setUtmMedium(utm.medium);
+      setUtmCampaign(utm.campaign);
+      setUtmTerm(utm.term);
+      setUtmContent(utm.content);
+
       if (Object.values(utm).some(Boolean)) {
         setUtmJson(JSON.stringify(utm));
       }
@@ -35,7 +50,7 @@ export default function LeadForm() {
     const fd = new FormData(form);
     const payload: Record<string, any> = Object.fromEntries(fd.entries());
 
-    // attach UTM JSON (if present)
+    // Keep JSON bundle for back-compat (server also reads canonical utm_* fields)
     if (utmJson) payload.utm = utmJson;
 
     try {
@@ -110,8 +125,15 @@ export default function LeadForm() {
         style={{ position: 'absolute', left: '-5000px', height: 0, width: 0, opacity: 0 }}
       />
 
-      {/* UTM bundle (JSON) */}
-      <input type="hidden" name="utm" value={utmJson} />
+      {/* Canonical UTM fields (hidden) */}
+      <input type="hidden" name="utm_source" value={utmSource} readOnly />
+      <input type="hidden" name="utm_medium" value={utmMedium} readOnly />
+      <input type="hidden" name="utm_campaign" value={utmCampaign} readOnly />
+      <input type="hidden" name="utm_term" value={utmTerm} readOnly />
+      <input type="hidden" name="utm_content" value={utmContent} readOnly />
+
+      {/* UTM bundle (JSON) for back-compat / analytics */}
+      <input type="hidden" name="utm" value={utmJson} readOnly />
 
       <button
         disabled={submitting}
@@ -130,4 +152,3 @@ export default function LeadForm() {
     </form>
   );
 }
-
