@@ -2,6 +2,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Inter } from "next/font/google";
+import { Analytics } from "@vercel/analytics/react";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -18,11 +19,11 @@ export const metadata: Metadata = {
     title: "Replicant — AI Sales Agents",
     description:
       "Qualify, schedule, and convert with a live AI agent. Voice, SMS, and chat.",
-    url: "https://replicantapp.com", // update later when your domain is live
+    url: "https://replicant-site.vercel.app", // update when your custom domain is live
     siteName: "Replicant",
     images: [
       {
-        url: "/og.png", // optional: add later
+        url: "/og.png", // optional (add later)
         width: 1200,
         height: 630,
         alt: "Replicant — AI Sales Agents",
@@ -46,7 +47,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen bg-[#0B1220] text-white antialiased">{children}</body>
+      <body className="min-h-screen bg-[#0B1220] text-white antialiased">
+        {children}
+        {/* Vercel Analytics */}
+        <Analytics />
+      </body>
     </html>
   );
 }
