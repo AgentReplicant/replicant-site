@@ -1,0 +1,17 @@
+[33mda10412[m feat: premium homepage + button fix
+[33mc456c31[m fix(lead): harden honeypot (204 early-return) + safe body parse
+[33mdd142f3[m chore: /api/lead 5xx email alert + /api/healthz endpoint
+[33mc29e6c0[m fix(calendar): Airtable lookup + upsert for Appointment Time
+[33m76bdc4a[m feat(calendar): Google OAuth + /api/schedule booking
+[33mf7a77dc[m feat(lead): UTM capture, honeypot, simple rate limit + admin notify
+[33m5341be0[m fix(stripe): align apiVersion with installed types
+[33m430abc8[m feat(stripe): add webhook route
+[33m386bd92[m lead form: add phone field (UI + API)
+[33me000f89[m lead: map Airtable fields via envs + better errors
+[33m1cdaca7[m fix(oauth): absolute redirects in callback + safer start origin
+[33m57facd2[m feat: Google OAuth flow (start + callback), save tokens to Airtable, redirect to /success
+[33m554d558[m fix: saved changes for success page + lead route
+[33mcc58991[m fix: final lowercase app/api/lead path
+[33m815e7c9[m chore: temp rename Lead -> lead_tmp under app/api
+[33m148906d[m success redirect + lead form
+[33m7f64ec7[m Step 1: site + chat + OAuth stubs

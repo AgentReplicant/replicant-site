@@ -34,7 +34,7 @@ async function sendGridNotify(to: string, subject: string, text: string) {
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
-        from: { email: 'alerts@replicantapp.com', name: 'Replicant' },
+        from: { email: 'agentreplicant@gmail.com', name: 'Replicant' },
         subject,
         content: [{ type: 'text/plain', value: text }],
       }),
