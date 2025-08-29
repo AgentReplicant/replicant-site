@@ -1,11 +1,9 @@
-// app/lead/page.tsx
 "use client";
 
 import dynamic from "next/dynamic";
 
-// Import your existing form exactly as it exists on disk (case-sensitive on Linux):
-// You earlier showed: ui/LeadForm.tsx  (capital L, F)
-const LeadForm = dynamic(() => import("@/ui/LeadForm"), { ssr: false });
+// NOTE: relative path from app/lead/page.tsx -> app/ui/LeadForm.tsx
+const LeadForm = dynamic(() => import("../ui/LeadForm"), { ssr: false });
 
 export default function LeadPage() {
   return (
@@ -18,7 +16,6 @@ export default function LeadPage() {
           </p>
         </header>
 
-        {/* Your existing form component handles fields + POST to /api/lead */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
           <LeadForm />
         </div>
