@@ -1,4 +1,5 @@
 "use client";
+
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,9 @@ export function CTA() {
           <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12),transparent_60%)]" />
           <h3 className="text-2xl font-semibold md:text-3xl">Ready to put bookings and sales on autopilot?</h3>
           <p className="mt-2 max-w-2xl text-white/80">Launch an AI agent that talks like your brand and closes like your best rep.</p>
+
           <div className="mt-6 flex flex-wrap gap-3">
+            {/* Both CTAs route into the existing lead flow */}
             <Button asChild size="lg" className="bg-[#00DBAA] text-black hover:bg-[#05c79b]">
               <Link href="/lead">Get Started</Link>
             </Button>
