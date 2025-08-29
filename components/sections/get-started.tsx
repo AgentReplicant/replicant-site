@@ -3,7 +3,6 @@
 import { Suspense } from "react";
 import dynamic from "next/dynamic";
 
-// components/sections  ->  app/ui/LeadForm
 const LeadForm = dynamic(() => import("@/app/ui/LeadForm"), { ssr: false });
 
 export default function GetStarted() {
@@ -14,7 +13,6 @@ export default function GetStarted() {
         <p className="mt-2 text-white/70">
           Tell us about your use case—this goes straight to the team.
         </p>
-
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
           <Suspense fallback={<div className="text-white/60">Loading form…</div>}>
             <LeadForm />
