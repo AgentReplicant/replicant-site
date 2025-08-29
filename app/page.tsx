@@ -1,15 +1,15 @@
 // app/page.tsx
 import Navbar from "@/components/navbar";
 import Hero from "@/components/sections/hero";
-import Logos from "@/components/sections/logos";
-import Features from "@/components/sections/features";
-import HowItWorks from "@/components/sections/howitworks";
-import Trust from "@/components/sections/trust";
+import { Logos } from "@/components/sections/logos";
+import { Features } from "@/components/sections/features";
+import { HowItWorks } from "@/components/sections/howitworks";
+import { Trust } from "@/components/sections/trust";
 import CTA from "@/components/sections/cta";
-import Footer from "@/components/footer";
+import { Footer } from "@/components/footer";
 
-// the existing client LeadForm
-import LeadForm from "@/ui/LeadForm";
+// NOTE: LeadForm is inside /app/ui, so use a relative import
+import LeadForm from "./ui/LeadForm";
 
 export default function Page() {
   return (
@@ -31,11 +31,10 @@ export default function Page() {
       <HowItWorks />
       <Trust />
 
-      {/* Primary CTA block (kept) */}
       <CTA />
 
       {/* Embedded lead form on the homepage */}
-      <section id="get-started" className="py-16">
+      <section id="get-started" className="py-16 scroll-mt-24">
         <div className="mx-auto max-w-2xl px-6">
           <header className="mb-6">
             <h2 className="text-2xl font-semibold">Get Started</h2>
