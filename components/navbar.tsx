@@ -1,34 +1,27 @@
+// components/navbar.tsx
 "use client";
-
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 
 export default function Navbar() {
   return (
-    <header className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-      <div className="flex h-16 items-center justify-between">
-        <Link href="/" className="inline-block">
-          <span className="font-semibold tracking-tight">Replicant</span>
+    <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0b0e12]/70 backdrop-blur">
+      <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
+        <Link href="/" className="font-semibold tracking-tight">
+          Replicant
         </Link>
 
-        <nav className="hidden md:flex items-center gap-8 text-sm text-white/80">
-          <Link href="#features" className="hover:text-white">Features</Link>
-          <Link href="#how" className="hover:text-white">How it works</Link>
-          <Link href="#trust" className="hover:text-white">Trust</Link>
-        </nav>
-
-        <div className="flex items-center gap-3">
-          {/* Temp “Sign in” can also scroll to form, or leave as /login later */}
-          <Button variant="ghost" asChild className="text-white/80 hover:text-white">
-            <Link href="#get-started">Sign in</Link>
-          </Button>
-
-          {/* Primary CTA → same-page form */}
-          <Button asChild className="bg-[#4E77FF] hover:bg-[#406cfo] text-black">
-            <Link href="#get-started">Get Started</Link>
-          </Button>
+        <div className="flex items-center gap-6">
+          <Link href="/signin" className="text-sm opacity-80 hover:opacity-100">
+            Sign in
+          </Link>
+          <Link
+            href="#get-started"
+            className="inline-flex items-center rounded-md bg-white px-3 py-1.5 text-sm font-medium text-black hover:opacity-90"
+          >
+            Get Started
+          </Link>
         </div>
-      </div>
+      </nav>
     </header>
   );
 }
