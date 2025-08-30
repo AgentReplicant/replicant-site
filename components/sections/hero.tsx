@@ -1,24 +1,30 @@
+// app/components/sections/hero.tsx
 import Link from "next/link";
 
 export default function Hero() {
   return (
-    <section className="relative isolate overflow-hidden">
-      {/* soft radial glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(80%_100%_at_50%_0%,rgba(56,189,248,0.12),rgba(2,6,23,0))]" />
-      <div className="mx-auto max-w-6xl px-6 py-24 sm:py-32">
-        <h1 className="text-4xl font-semibold leading-tight md:text-6xl">
-          AI Sales Agents That{" "}
-          <span className="text-sky-400">Close Deals</span> For You
+    <section className="relative isolate overflow-hidden bg-gradient-to-b from-[#0C1B2A] via-[#0C1B2A] to-transparent pb-20 pt-28 md:pt-36">
+      <div className="mx-auto max-w-6xl px-4">
+        <h1 className="max-w-3xl text-4xl font-extrabold leading-tight tracking-tight md:text-6xl">
+          AI Sales Agents That <span className="text-sky-400">Close Deals</span> For You
         </h1>
 
-        <div className="mt-8 flex gap-4">
+        <p className="mt-4 max-w-2xl text-slate-300">
+          Qualify, book, and convert across voice, SMS, and chat—without adding headcount.
+        </p>
+
+        <div className="mt-8 flex items-center gap-4">
           <Link
-            href="#get-started"
-            className="inline-flex items-center rounded-md bg-white px-4 py-2 text-sm font-medium text-black hover:opacity-90"
+            href="/#get-started"
+            className="inline-flex items-center rounded-xl bg-white px-4 py-2 text-sm font-semibold text-[#0B0E12] shadow-md ring-1 ring-white/10 hover:bg-slate-100 active:scale-[0.99] transition"
           >
             Book a Demo
           </Link>
-          <Link href="#features" className="text-sky-400">
+
+          <Link
+            href="/#features"
+            className="text-sm font-medium text-sky-400 underline-offset-4 hover:text-sky-300 hover:underline"
+          >
             See Features
           </Link>
         </div>
