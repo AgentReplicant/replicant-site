@@ -1,6 +1,5 @@
-// app/components/sections/get-started.tsx
-import dynamic from "next/dynamic";
-const LeadForm = dynamic(() => import("@/app/ui/LeadForm"), { ssr: false });
+// components/sections/get-started.tsx
+import LeadForm from "@/app/ui/LeadForm"; // Client component; safe to import from a Server Component
 
 export default function GetStartedSection() {
   return (
