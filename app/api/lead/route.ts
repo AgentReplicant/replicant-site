@@ -11,17 +11,6 @@ type LeadIn = {
 
 const TABLE = process.env.AIRTABLE_TABLE_NAME || "Leads";
 
-// Field-name mapping (defaults match your base; envs let you rename safely)
-const F = {
-  name: process.env.LEAD_FIELD_NAME || "Name",
-  email: process.env.LEAD_FIELD_EMAIL || "Email",
-  phone: process.env.LEAD_FIELD_PHONE || "Phone",
-  notes: process.env.LEAD_FIELD_NOTES || "Message",
-  source: process.env.LEAD_FIELD_SOURCE || "Source",
-  status: process.env.LEAD_FIELD_STATUS || "Status",
-  createdAt: process.env.LEAD_FIELD_CREATED_AT || "", // leave blank unless you really want to set a custom field
-};
-
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as LeadIn;
@@ -40,16 +29,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "invalid_input" }, { status: 400 });
     }
 
-    // build Airtable fields using your mapping
+    // Use the exact Airtable field names you already have
     const fields: Record<string, any> = {
-      [F.name]: name,
-      [F.email]: email,
-      [F.source]: source,
-      [F.status]: "New",
+      Name: name,
+      Email: email,
+      Source: source,
+      Status: "New",
     };
-    if (phone) fields[F.phone] = phone;
-    if (message) fields[F.notes] = message;
-    if (F.createdAt) fields[F.createdAt] = new Date().toISOString(); // only if you mapped a custom field
+    if (phone) fields["Phone"] = phone;
+    if (message) fields["Message"] = message;
 
     const url = `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${encodeURIComponent(
       TABLE
@@ -60,9 +48,10 @@ export async function POST(req: Request) {
       headers: {
         Authorization: `Bearer ${process.env.AIRTABLE_TOKEN}`,
         "Content-Type": "application/json",
-        "Prefer": "return=representation", // helpful for debugging
+        Prefer: "return=representation",
       },
-      body: JSON.stringify({ records: [{ fields }] }),
+      // `typecast: true` helps when fields are single-select etc.
+      body: JSON.stringify({ records: [{ fields }], typecast: true }),
       cache: "no-store",
     });
 
