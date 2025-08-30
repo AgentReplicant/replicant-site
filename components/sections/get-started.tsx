@@ -13,6 +13,7 @@ export default function GetStarted() {
         <p className="mt-2 text-white/70">
           Tell us about your use case—this goes straight to the team.
         </p>
+
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
           <Suspense fallback={<div className="text-white/60">Loading form…</div>}>
             <LeadForm />

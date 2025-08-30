@@ -1,6 +1,3 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-
 export default function CTA() {
   return (
     <section className="py-16 md:py-24">
@@ -9,10 +6,14 @@ export default function CTA() {
         <p className="mt-2 text-white/70">
           Tell us about your use case — we’ll reach out and get you set up.
         </p>
+
         <div className="mt-6">
-          <Link href="#get-started">
-            <Button size="lg">Get Started</Button>
-          </Link>
+          {/* Same-page anchor, not next/link */}
+          <a href="#get-started">
+            <button className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black hover:opacity-90">
+              Get Started
+            </button>
+          </a>
         </div>
       </div>
     </section>
