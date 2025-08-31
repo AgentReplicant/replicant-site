@@ -1,11 +1,11 @@
 // app/page.tsx
 import Hero from "@/components/sections/hero";
-import { Features } from "@/components/sections/features";
-import { HowItWorks } from "@/components/sections/howitworks";
+import { Features } from "@/components/sections/features";      // named export
+import { HowItWorks } from "@/components/sections/howitworks";   // named export
 import Pricing from "@/components/sections/pricing";
-import FAQ from "@/components/sections/faq";
 import GetStarted from "@/components/sections/get-started";
-import Footer from "@/components/footer"; // <-- fixed path
+import FAQ from "@/components/sections/faq";
+import Footer from "@/components/footer";
 
 export default function HomePage() {
   return (
@@ -24,7 +24,7 @@ export default function HomePage() {
         <Pricing />
       </section>
 
-      {/* GetStarted already renders a section with id="get-started" internally */}
+      {/* GetStarted renders its own <section id="get-started"> */}
       <GetStarted />
 
       <section id="faq" className="py-10 md:py-24">
