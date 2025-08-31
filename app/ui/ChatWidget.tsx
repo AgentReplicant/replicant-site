@@ -1,155 +1,187 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 
-type Msg = { role: "agent" | "user"; text: string };
-
-// Make plain URLs clickable, but keep it safe.
-function asHtml(text: string) {
-  const esc = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const urlRe = /(https?:\/\/[^\s)]+)(?![^<]*>|[^<>]*<\/a>)/g;
-  return esc.replace(urlRe, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-}
+type Msg = { role: "user" | "assistant"; text: string; meta?: any };
+type Slot = { start: string; end: string; label: string };
 
 export default function ChatWidget() {
-  const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([
-    { role: "agent", text: "Hey — want me to qualify you and book a call?" },
+    { role: "assistant", text: "Hey — want to book a demo or pay to get started?" }
   ]);
-  const [input, setInput] = useState("");
+  const [email, setEmail] = useState<string | undefined>(undefined);
+  const [pendingSlots, setPendingSlots] = useState<Slot[] | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Public Stripe link for quick “pay” action.
-  const payUrl = useMemo(
-    () => process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK || "",
-    []
-  );
+  const append = (m: Msg) => setMessages((prev) => [...prev, m]);
 
-  const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  async function callBrain(payload: any) {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  }
 
-  const push = (m: Msg) => setMessages((prev) => [...prev, m]);
-
-  // === The "brain" hook-up lives here ===
-  const send = async () => {
-    const text = input.trim();
-    if (!text) return;
-
-    // echo user
-    setMessages((m) => [...m, { role: "user", text }]);
-    setInput("");
-
-    const lower = text.toLowerCase();
-
-    // quick affordances: booking + pay
-    if (lower.includes("book") || lower.includes("schedule") || lower.includes("call")) {
-      push({
-        role: "agent",
-        text:
-          "I can offer Wed/Thu all day or 4:30–7:30pm other days. " +
-          "Or you can pay now to fast-track onboarding.",
-      });
-      if (payUrl) {
-        push({ role: "agent", text: `Pay now: ${payUrl}` });
-      }
-      return;
-    }
-
-    if (lower.includes("pay") || lower.includes("checkout")) {
-      if (payUrl) {
-        push({
-          role: "agent",
-          text: `Pay now: ${payUrl}\n\nAfter payment, I’ll send onboarding steps.`,
-        });
-      } else {
-        push({
-          role: "agent",
-          text: "Payment link isn’t configured yet. Ask me to ‘book a call’ instead.",
-        });
-      }
-      return;
-    }
-
-    // Hand off to your backend "brain"
+  async function handleSend(text?: string) {
+    const content = (text ?? inputRef.current?.value ?? "").trim();
+    if (!content) return;
+    append({ role: "user", text: content });
+    inputRef.current && (inputRef.current.value = "");
+    setBusy(true);
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input: text,
-          history: messages, // optional, helps the brain keep context
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      const reply =
-        (typeof data?.reply === "string" && data.reply.trim()) ||
-        "Got it. You can also try: “book a call” or “pay”.";
-      push({ role: "agent", text: reply });
-    } catch {
-      push({
-        role: "agent",
-        text: "Hmm, I couldn’t reach the server just now. Try again?",
-      });
+      const data = await callBrain({ message: content, history: [] });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
     }
-  };
+  }
+
+  async function handleBrainResult(data: any) {
+    // normalize rendering
+    if (data.type === "action" && data.action === "open_url" && data.url) {
+      append({ role: "assistant", text: data.text || "Opening payment…" });
+      // Render as clickable CTA
+      append({
+        role: "assistant",
+        text: `👉 Pay here: ${data.url}`,
+        meta: { link: data.url }
+      });
+      setPendingSlots(null);
+      return;
+    }
+
+    if (data.type === "slots" && Array.isArray(data.slots)) {
+      if (data.email) setEmail(data.email);
+      setPendingSlots(data.slots);
+      append({ role: "assistant", text: data.text || "Pick a time:" });
+      return;
+    }
+
+    if (data.type === "need_email") {
+      append({ role: "assistant", text: data.text || "What email should I use?" });
+      return;
+    }
+
+    if (data.type === "booked") {
+      setPendingSlots(null);
+      const when = data.when ? ` (${data.when})` : "";
+      const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
+      append({ role: "assistant", text: `All set!${when}${meet}` });
+      return;
+    }
+
+    if (data.type === "text" && data.text) {
+      append({ role: "assistant", text: data.text });
+      return;
+    }
+
+    if (data.type === "error") {
+      append({ role: "assistant", text: data.text || "Something went wrong." });
+      return;
+    }
+
+    // fallback
+    if (data?.text) append({ role: "assistant", text: data.text });
+  }
+
+  async function pickSlot(slot: Slot) {
+    setBusy(true);
+    try {
+      if (!email) {
+        // Ask brain to re-show slots but first collect email
+        append({ role: "assistant", text: "Got it. What email should I send the invite to?" });
+        // Store the slot temporarily so user can confirm later
+        setPendingSlots([slot, ...(pendingSlots?.filter(s => s.start !== slot.start) || [])]);
+      } else {
+        const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email }, history: [] });
+        await handleBrainResult(data);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitEmail(raw: string) {
+    const e = raw.trim();
+    setEmail(e);
+    const data = await callBrain({ provideEmail: { email: e }, history: [] });
+    await handleBrainResult(data);
+  }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
-      {open && (
-        <div className="mb-3 w-80 rounded-2xl border border-white/10 bg-slate-900/95 backdrop-blur p-3 shadow-xl">
-          <div className="mb-2 text-sm text-slate-300">Replicant</div>
+    <div className="fixed bottom-4 right-4 w-80 rounded-2xl shadow-xl border p-3 bg-white/90 backdrop-blur">
+      <div className="font-semibold mb-2">Replicant Assistant</div>
 
-          <div ref={listRef} className="max-h-64 overflow-y-auto space-y-2 pr-1">
-            {messages.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-                <span
-                  className={
-                    "inline-block rounded-xl px-3 py-2 text-sm break-words " +
-                    (m.role === "user" ? "bg-blue-600" : "bg-white/10 text-slate-100")
-                  }
-                  dangerouslySetInnerHTML={{ __html: asHtml(m.text) }}
-                />
+      <div className="h-64 overflow-y-auto space-y-2 mb-2 pr-1">
+        {messages.map((m, i) => (
+          <div key={i} className={`text-sm ${m.role === "user" ? "text-right" : "text-left"}`}>
+            <div className={`inline-block px-3 py-2 rounded-2xl ${m.role === "user" ? "bg-black text-white" : "bg-gray-100"}`}>
+              {m.text}
+            </div>
+            {m.meta?.link && (
+              <div className="mt-1">
+                <a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">
+                  {m.meta.link}
+                </a>
               </div>
-            ))}
+            )}
           </div>
+        ))}
 
-          <div className="mt-2 flex gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder='Type here… (try “book a call” or “pay”)'
-              className="flex-1 rounded-xl bg-black/40 px-3 py-2 text-sm outline-none border border-white/10"
-            />
-            <button
-              onClick={send}
-              className="rounded-xl bg-blue-600 hover:bg-blue-700 px-3 py-2 text-sm font-medium"
-            >
-              Send
-            </button>
+        {pendingSlots && pendingSlots.length > 0 && (
+          <div className="mt-2">
+            <div className="text-xs text-gray-600 mb-1">Quick picks:</div>
+            <div className="flex flex-wrap gap-2">
+              {pendingSlots.map((s) => (
+                <button
+                  key={s.start}
+                  onClick={() => pickSlot(s)}
+                  className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                  disabled={busy}
+                  title={`${new Date(s.start).toLocaleString("en-US", { timeZone: "America/New_York" })}`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-full bg-blue-600 hover:bg-blue-700 w-14 h-14 grid place-items-center shadow-lg"
-        aria-label="Open chat"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          className="w-6 h-6"
+      <div className="flex items-center gap-2">
+        <input
+          ref={inputRef}
+          placeholder={email ? "Type a message…" : "Type a message… (or send your email)"}
+          className="flex-1 border rounded-xl px-3 py-2 text-sm"
+          onKeyDown={async (e) => {
+            if (e.key === "Enter") {
+              const v = (e.target as HTMLInputElement).value.trim();
+              if (!v) return;
+              if (!email && /@/.test(v)) {
+                append({ role: "user", text: v });
+                (e.target as HTMLInputElement).value = "";
+                await submitEmail(v);
+              } else {
+                await handleSend(v);
+              }
+            }
+          }}
+        />
+        <button
+          onClick={() => handleSend()}
+          className="text-sm px-3 py-2 rounded-xl bg-black text-white disabled:opacity-50"
+          disabled={busy}
         >
-          <path d="M2.25 12c0-4.97 4.38-9 9.75-9s9.75 4.03 9.75 9-4.38 9-9.75 9a10.8 10.8 0 0 1-3.46-.56c-.49.3-1.73.98-3.85 1.64-.34.11-.68-.18-.6-.53.33-1.4.54-2.53.64-3.2A8.9 8.9 0 0 1 2.25 12Z" />
-        </svg>
-      </button>
+          Send
+        </button>
+      </div>
+
+      <div className="mt-2 text-[11px] text-gray-500">
+        Tips: try <span className="font-mono">book a call</span> or <span className="font-mono">pay</span>.
+      </div>
     </div>
   );
 }
