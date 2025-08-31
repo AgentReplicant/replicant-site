@@ -1,32 +1,36 @@
-// app/components/sections/hero.tsx
-import Link from "next/link";
-
 export default function Hero() {
+  function tryDemo() {
+    (window as any).replicantOpenChat?.();
+    // belt + suspenders: also fire an event if the hook isn't set yet
+    if (!(window as any).replicantOpenChat) {
+      window.dispatchEvent(new Event("replicant:open-chat"));
+    }
+  }
+
   return (
-    <section className="relative isolate overflow-hidden bg-gradient-to-b from-[#0C1B2A] via-[#0C1B2A] to-transparent pb-20 pt-28 md:pt-36">
-      <div className="mx-auto max-w-6xl px-4">
-        <h1 className="max-w-3xl text-4xl font-extrabold leading-tight tracking-tight md:text-6xl">
+    <section className="relative overflow-hidden">
+      <div className="mx-auto max-w-5xl px-4 py-16 md:py-24">
+        <h1 className="text-4xl md:text-6xl font-semibold tracking-tight">
           AI Sales Agents That <span className="text-sky-400">Close Deals</span> For You
         </h1>
-
-        <p className="mt-4 max-w-2xl text-slate-300">
+        <p className="mt-4 text-base md:text-lg opacity-80 max-w-2xl">
           Qualify, book, and convert across voice, SMS, and chat—without adding headcount.
         </p>
 
-        <div className="mt-8 flex items-center gap-4">
-          <Link
-            href="/#get-started"
-            className="inline-flex items-center rounded-xl bg-white px-4 py-2 text-sm font-semibold text-[#0B0E12] shadow-md ring-1 ring-white/10 hover:bg-slate-100 active:scale-[0.99] transition"
+        <div className="mt-6 flex items-center gap-4">
+          <a
+            href="#get-started"
+            className="inline-flex items-center rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-white/20"
           >
-            Book a Demo
-          </Link>
+            Book a demo
+          </a>
 
-          <Link
-            href="/#features"
-            className="text-sm font-medium text-sky-400 underline-offset-4 hover:text-sky-300 hover:underline"
+          <button
+            onClick={tryDemo}
+            className="inline-flex items-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-sky-500 focus:outline-none"
           >
-            See Features
-          </Link>
+            Try the live demo
+          </button>
         </div>
       </div>
     </section>

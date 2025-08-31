@@ -1,4 +1,3 @@
-// app/api/stripe/webhook/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
@@ -6,7 +5,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: '2025-07-30.basil', // <-- update made here
+  // Keep your current version
+  apiVersion: '2025-07-30.basil',
 });
 
 export async function GET() {
@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Missing signature or secret' }, { status: 400 });
   }
 
+  // IMPORTANT: raw body for signature verification
   const rawBody = Buffer.from(await req.arrayBuffer());
   let event: Stripe.Event;
   try {
@@ -39,10 +40,12 @@ export async function POST(req: NextRequest) {
       const stripeSessionId = s.id;
 
       await maybeUpdateAirtable({ email, name, stripeSessionId });
+
+      // Optional admin heads-up (auto-skips if SENDGRID_API_KEY not set)
       await maybeSendEmail({
         to: process.env.ADMIN_NOTIFY_EMAIL,
         subject: 'Replicant — New Payment',
-        text: `New payment from ${name || email} (session ${stripeSessionId}).`,
+        text: `New payment from ${name || email}\nSession: ${stripeSessionId}`,
       });
     }
     return NextResponse.json({ received: true });
@@ -53,8 +56,14 @@ export async function POST(req: NextRequest) {
 }
 
 async function maybeUpdateAirtable({
-  email, name, stripeSessionId,
-}: { email?: string; name?: string; stripeSessionId?: string }) {
+  email,
+  name,
+  stripeSessionId,
+}: {
+  email?: string;
+  name?: string;
+  stripeSessionId?: string;
+}) {
   const token = process.env.AIRTABLE_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
   if (!token || !baseId || !email) return;
@@ -65,12 +74,18 @@ async function maybeUpdateAirtable({
   };
 
   try {
+    // Safer email match: lowercase + double quotes
     const list = await fetch(
-      `https://api.airtable.com/v0/${baseId}/Leads?filterByFormula=${encodeURIComponent(`{Email}='${email}'`)}&maxRecords=1`,
+      `https://api.airtable.com/v0/${baseId}/Leads?filterByFormula=${
+        encodeURIComponent(`LOWER({Email})="${email.toLowerCase()}"`)
+      }&maxRecords=1`,
       { headers, cache: 'no-store' }
-    ).then(r => r.json());
+    ).then((r) => r.json());
 
     if (list.records?.[0]) {
+      // Idempotency guard: skip if this session already processed
+      if (list.records[0].fields?.StripePaymentId === stripeSessionId) return;
+
       await fetch(`https://api.airtable.com/v0/${baseId}/Leads/${list.records[0].id}`, {
         method: 'PATCH',
         headers,
@@ -80,6 +95,7 @@ async function maybeUpdateAirtable({
             StripePaymentId: stripeSessionId || '',
             Source: 'stripe',
           },
+          typecast: true, // handle single-selects etc.
         }),
       });
     } else {
@@ -87,15 +103,18 @@ async function maybeUpdateAirtable({
         method: 'POST',
         headers,
         body: JSON.stringify({
-          records: [{
-            fields: {
-              Name: name || '',
-              Email: email,
-              Status: 'Paid',
-              StripePaymentId: stripeSessionId || '',
-              Source: 'stripe',
+          records: [
+            {
+              fields: {
+                Name: name || '',
+                Email: email,
+                Status: 'Paid',
+                StripePaymentId: stripeSessionId || '',
+                Source: 'stripe',
+              },
             },
-          }],
+          ],
+          typecast: true, // handle single-selects etc.
         }),
       });
     }
@@ -105,8 +124,14 @@ async function maybeUpdateAirtable({
 }
 
 async function maybeSendEmail({
-  to, subject, text,
-}: { to?: string | null; subject: string; text: string }) {
+  to,
+  subject,
+  text,
+}: {
+  to?: string | null;
+  subject: string;
+  text: string;
+}) {
   const key = process.env.SENDGRID_API_KEY;
   if (!key || !to) return;
   try {

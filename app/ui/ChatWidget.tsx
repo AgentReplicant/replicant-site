@@ -1,14 +1,18 @@
 "use client";
+
 import { useState } from "react";
+
+const CHECKOUT =
+  (process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK as string | undefined) || "#";
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState([
-    { role: "agent", text: "Hey — want me to qualify you and book a call?" },
-  ]);
+  const [messages, setMessages] = useState<
+    { role: "agent" | "user"; text: string; html?: boolean }[]
+  >([{ role: "agent", text: "Hey — want me to qualify you and book a call?" }]);
   const [input, setInput] = useState("");
 
-  const send = async () => {
+  const send = () => {
     const text = input.trim();
     if (!text) return;
     setMessages((m) => [...m, { role: "user", text }]);
@@ -25,14 +29,23 @@ export default function ChatWidget() {
         },
         {
           role: "agent",
+          html: true,
+          text: `Pay now: <a href="${CHECKOUT}" target="_blank" rel="noopener noreferrer" class="underline text-blue-300 hover:text-blue-200">Checkout</a>`,
+        },
+        {
+          role: "agent",
+          html: true,
           text:
-            "Pay now: [STRIPE_CHECKOUT_LINK] (replace this placeholder in Step 8)",
+            `Prefer to talk first? <a href="#get-started" class="underline">Book a demo</a>.`,
         },
       ]);
     } else {
       setMessages((m) => [
         ...m,
-        { role: "agent", text: "Got it. Ask me to 'book a call' to see scheduling." },
+        {
+          role: "agent",
+          text: "Got it. Ask me to “book a call” to see scheduling.",
+        },
       ]);
     }
   };
@@ -42,22 +55,23 @@ export default function ChatWidget() {
       {open && (
         <div className="mb-3 w-80 rounded-2xl border border-white/10 bg-slate-900/95 backdrop-blur p-3 shadow-xl">
           <div className="mb-2 text-sm text-slate-300">Replicant</div>
+
           <div className="max-h-64 overflow-y-auto space-y-2">
             {messages.map((m, i) => (
               <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
                 <span
                   className={
                     "inline-block rounded-xl px-3 py-2 text-sm " +
-                    (m.role === "user"
-                      ? "bg-blue-600"
-                      : "bg-white/10 text-slate-100")
+                    (m.role === "user" ? "bg-blue-600" : "bg-white/10 text-slate-100")
                   }
+                  dangerouslySetInnerHTML={m.html ? { __html: m.text } : undefined}
                 >
-                  {m.text}
+                  {!m.html ? m.text : undefined}
                 </span>
               </div>
             ))}
           </div>
+
           <div className="mt-2 flex gap-2">
             <input
               value={input}
@@ -73,6 +87,24 @@ export default function ChatWidget() {
               Send
             </button>
           </div>
+
+          {/* quick actions */}
+          <div className="mt-3 flex gap-2">
+            <a
+              href="#get-started"
+              className="flex-1 text-center rounded-lg bg-white/10 hover:bg-white/15 px-3 py-2 text-sm"
+            >
+              Book a demo
+            </a>
+            <a
+              href={CHECKOUT}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 text-center rounded-lg bg-blue-600 hover:bg-blue-700 px-3 py-2 text-sm font-medium"
+            >
+              Pay now
+            </a>
+          </div>
         </div>
       )}
 
@@ -81,7 +113,12 @@ export default function ChatWidget() {
         className="rounded-full bg-blue-600 hover:bg-blue-700 w-14 h-14 grid place-items-center shadow-lg"
         aria-label="Open chat"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          className="w-6 h-6"
+        >
           <path d="M2.25 12c0-4.97 4.38-9 9.75-9s9.75 4.03 9.75 9-4.38 9-9.75 9a10.8 10.8 0 0 1-3.46-.56c-.49.3-1.73.98-3.85 1.64-.34.11-.68-.18-.6-.53.33-1.4.54-2.53.64-3.2A8.9 8.9 0 0 1 2.25 12Z" />
         </svg>
       </button>

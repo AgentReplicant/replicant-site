@@ -14,7 +14,9 @@ const AT_HEADERS_JSON = {
 
 async function getRefreshTokenFromAirtable() {
   const res = await fetch(
-    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Name}="Google OAuth"`)}`,
+    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(
+      `{Name}="Google OAuth"`
+    )}`,
     { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
   );
   const json = await res.json();
@@ -42,16 +44,19 @@ async function refreshAccessToken(refreshToken: string) {
     }),
   });
   if (!res.ok) throw new Error(`Failed to refresh access token: ${await res.text()}`);
-  return res.json() as Promise<{ access_token: string; expires_in: number }>;
+  return (await res.json()) as { access_token: string; expires_in: number };
 }
 
-async function createCalendarEvent(accessToken: string, payload: {
-  summary?: string;
-  description?: string;
-  start: string; // ISO
-  end: string;   // ISO
-  attendeeEmail?: string;
-}) {
+async function createCalendarEvent(
+  accessToken: string,
+  payload: {
+    summary?: string;
+    description?: string;
+    start: string; // ISO
+    end: string; // ISO
+    attendeeEmail?: string;
+  }
+) {
   const tz = process.env.BOOKING_TZ || 'America/New_York';
   const calId = process.env.GOOGLE_CALENDAR_ID!;
   const requestId = 'req-' + Math.random().toString(36).slice(2);
@@ -68,7 +73,9 @@ async function createCalendarEvent(accessToken: string, payload: {
   };
 
   const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?conferenceDataVersion=1`,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calId
+    )}/events?conferenceDataVersion=1`,
     {
       method: 'POST',
       headers: {
@@ -88,9 +95,11 @@ async function upsertAirtableAppointment(email: string | undefined, startISO: st
 
   // IMPORTANT: double quotes in the filterByFormula
   const list = await fetch(
-    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(`{Email}="${email}"`)}`,
+    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(
+      `{Email}="${email}"`
+    )}`,
     { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
-  ).then(r => r.json());
+  ).then((r) => r.json());
 
   const fields = {
     Email: email,
@@ -124,6 +133,29 @@ async function upsertAirtableAppointment(email: string | undefined, startISO: st
   }
 }
 
+// --- Optional email helper (auto-skips if no SENDGRID_API_KEY) ---
+async function maybeSendEmail(opts: { to?: string | null; subject: string; text: string }) {
+  const key = process.env.SENDGRID_API_KEY;
+  if (!key || !opts.to) return;
+  try {
+    await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: opts.to }] }],
+        from: { email: 'agentreplicant@gmail.com', name: 'Replicant' },
+        subject: opts.subject,
+        content: [{ type: 'text/plain', value: opts.text }],
+      }),
+    });
+  } catch (e) {
+    console.warn('SendGrid notify skipped/error:', e);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -153,10 +185,30 @@ export async function POST(req: NextRequest) {
     // Upsert into Airtable
     await upsertAirtableAppointment(email, start);
 
+    // --- Optional emails (admin + customer) ---
+    const tz = process.env.BOOKING_TZ || 'America/New_York';
+    const when = new Date(start).toLocaleString(tz, { timeZone: tz });
+    const meetLink =
+      event.hangoutLink || event.conferenceData?.entryPoints?.[0]?.uri || null;
+
+    await maybeSendEmail({
+      to: process.env.ADMIN_NOTIFY_EMAIL,
+      subject: 'Replicant — New booking',
+      text: `Email: ${email || '(no email)'}\nWhen: ${when}\nMeet: ${meetLink || '(pending)'}\nEvent: ${event.htmlLink}`,
+    });
+    if (email) {
+      await maybeSendEmail({
+        to: email,
+        subject: 'Your Replicant consultation is booked',
+        text: `Thanks! You’re booked for ${when}.\nGoogle Meet: ${meetLink}\nEvent: ${event.htmlLink}`,
+      });
+    }
+    // -----------------------------------------
+
     return NextResponse.json({
       ok: true,
       eventId: event.id,
-      meetLink: event.hangoutLink || event.conferenceData?.entryPoints?.[0]?.uri || null,
+      meetLink,
       htmlLink: event.htmlLink,
     });
   } catch (e: any) {
