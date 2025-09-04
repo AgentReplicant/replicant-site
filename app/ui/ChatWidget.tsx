@@ -7,7 +7,7 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v5";
+const STORE_KEY = "replicant_chat_v6";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n=14) { const out: Date[] = []; const now = new Date(); for (let i=0;i<n;i++) out.push(new Date(now.getTime()+i*86400000)); return out; }
@@ -31,7 +31,7 @@ export default function ChatWidget() {
     { label: "Show times", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
     { label: "Pricing", value: "how much is it?" },
-    { label: "Pay now", value: "pay" },
+    { label: "Pay now", value: "pay now" },
   ]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
@@ -61,8 +61,10 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // auto-scroll
   useEffect(() => { const el = wrapRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, busy, slots, showDayPicker, showScheduler, isTall]);
 
+  // persist
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -81,6 +83,7 @@ export default function ChatWidget() {
     setMessages((m) => [...m, { role: "bot", text, meta }]);
     historyRef.current.push({ role: "assistant", content: text });
   }
+
   async function callBrain(payload: any) {
     const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
     const res = await fetch("/api/chat", {
@@ -103,7 +106,11 @@ export default function ChatWidget() {
 
     if (data.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null); setShowScheduler(false); setShowDayPicker(false);
-      setSuggestions([{ label: "Show times", value: "book a call" }, { label: "Keep explaining", value: "please keep explaining" }]);
+      // keep talking; do not “close” the convo
+      setSuggestions([
+        { label: "Show times", value: "book a call" },
+        { label: "Keep explaining", value: "please keep explaining" },
+      ]);
       appendBot(data.text || "Here’s a secure checkout:");
       appendBot(`👉 ${data.url}`, { link: data.url });
       return;
@@ -114,7 +121,7 @@ export default function ChatWidget() {
       setShowScheduler(true);
       setShowDayPicker(false);
       setSlots(data.slots);
-      setSuggestions([]);
+      setSuggestions([]); // real options appear as slot buttons
       appendBot(data.text || "Pick a time:");
       return;
     }
@@ -136,16 +143,16 @@ export default function ChatWidget() {
         { label: "Show times", value: "book a call" },
         { label: "Keep explaining", value: "please keep explaining" },
         { label: "Pricing", value: "how much is it?" },
-        { label: "Pay now", value: "pay" },
+        { label: "Pay now", value: "pay now" },
       ]);
       return;
     }
 
     if (data.type === "error") { appendBot(data.text || "Something went wrong. Mind trying again?"); return; }
-
     if (data?.text) appendBot(data.text);
   }
 
+  // ---- actions ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
@@ -213,132 +220,136 @@ export default function ChatWidget() {
       )}
 
       {open && (
-        <div className={`fixed bottom-6 right-6 z-[1000] ${isTall ? "h-[80vh]" : ""} w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden`}>
-          {/* Header */}
-          <div className="bg-white border-b px-4 py-3 flex items-center justify-between">
-            <div className="font-semibold text-sm">Replicant Assistant</div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setIsTall((v)=>!v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">{isTall ? "▭" : "▮▮"}</button>
-              <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
+        <div
+          className={`fixed bottom-6 right-6 z-[1000] w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden`}
+          style={{ height: isTall ? "80vh" : "620px" }}
+        >
+          {/* Flex column to avoid dead space */}
+          <div className="h-full flex flex-col">
+            {/* Header */}
+            <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
+              <div className="font-semibold text-sm">Replicant Assistant</div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setIsTall((v)=>!v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">{isTall ? "▭" : "▮▮"}</button>
+                <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
+              </div>
             </div>
-          </div>
 
-          {/* Messages */}
-          <div ref={wrapRef} className={`${isTall ? "h-[calc(80vh-200px)]" : "h-[520px]"} overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]`}>
-            {messages.map((m, i) => (
-              <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"}`}>
-                  <div>{m.text}</div>
-                  {m.meta?.link && <div className="mt-1"><a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">{m.meta.link}</a></div>}
-                </div>
-              </div>
-            ))}
-
-            {/* Collapsible scheduler */}
-            {showScheduler && (
-              <div className="mt-3 border border-gray-200 bg-white rounded-xl">
-                <div className="flex items-center justify-between px-3 py-2 border-b">
-                  <div className="text-xs font-medium">Scheduling</div>
-                  <div className="flex gap-2">
-                    <button onClick={() => setShowScheduler(false)} className="text-xs underline">Hide</button>
-                    <button onClick={resetSchedulingUI} className="text-xs underline">Reset</button>
+            {/* Messages */}
+            <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
+              {messages.map((m, i) => (
+                <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"}`}>
+                    <div>{m.text}</div>
+                    {m.meta?.link && <div className="mt-1"><a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">{m.meta.link}</a></div>}
                   </div>
                 </div>
+              ))}
 
-                {showDayPicker && (
-                  <div className="px-3 py-2">
-                    <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => chooseDay(new Date())} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>Today</button>
-                      <button onClick={() => chooseDay(new Date(Date.now()+86400000))} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>Tomorrow</button>
-                      {dayButtons}
+              {/* Collapsible scheduler */}
+              {showScheduler && (
+                <div className="mt-3 border border-gray-200 bg-white rounded-xl">
+                  <div className="flex items-center justify-between px-3 py-2 border-b">
+                    <div className="text-xs font-medium">Scheduling</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setShowScheduler(false)} className="text-xs underline">Hide</button>
+                      <button onClick={resetSchedulingUI} className="text-xs underline">Reset</button>
                     </div>
                   </div>
-                )}
 
-                {slots && slots.length > 0 && (
-                  <div className="px-3 py-2 border-t">
-                    <div className="text-xs text-gray-600 mb-1">
-                      {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
+                  {showDayPicker && (
+                    <div className="px-3 py-2">
+                      <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => chooseDay(new Date())} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>Today</button>
+                        <button onClick={() => chooseDay(new Date(Date.now()+86400000))} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>Tomorrow</button>
+                        {dayButtons}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-gray-500 mb-2">
-                      All times shown in Eastern Time (ET).
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {slots.map((s) => (
-                        <button key={s.start} onClick={() => pickSlot(s)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
-                          {s.label}
-                        </button>
-                      ))}
-                      <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>More times →</button>
-                      <button onClick={() => setShowDayPicker(true)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>← Change day</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
 
-            {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
-          </div>
+                  {slots && slots.length > 0 && (
+                    <div className="px-3 py-2 border-t">
+                      <div className="text-xs text-gray-600 mb-1">
+                        {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
+                      </div>
+                      <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
+                      <div className="flex flex-wrap gap-2">
+                        {slots.map((s) => (
+                          <button key={s.start} onClick={() => pickSlot(s)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                            {s.label}
+                          </button>
+                        ))}
+                        <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>More times →</button>
+                        <button onClick={() => setShowDayPicker(true)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>← Change day</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
-          {/* Input + quick actions */}
-          <div className="bg-white border-t p-2">
-            {suggestions.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-2">
-                {suggestions.map((s) => (
-                  <button
-                    key={s.value}
-                    onClick={async () => {
-                      if (s.value === "book a call") {
-                        setSuggestions([]);
-                        setShowScheduler(true);
-                        setShowDayPicker(true);
-                        if (!askedDayOnce) { appendBot("Which day works for you?"); setAskedDayOnce(true); }
+              {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
+            </div>
+
+            {/* Input + quick actions */}
+            <div className="bg-white border-t p-2 shrink-0">
+              {suggestions.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {suggestions.map((s) => (
+                    <button
+                      key={s.value}
+                      onClick={async () => {
+                        if (s.value === "book a call") {
+                          setSuggestions([]);
+                          setShowScheduler(true);
+                          setShowDayPicker(true);
+                          if (!askedDayOnce) { appendBot("Which day works for you?"); setAskedDayOnce(true); }
+                        } else {
+                          void handleSend(s.value);
+                        }
+                      }}
+                      className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                      disabled={busy}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const v = (e.target as HTMLInputElement).value.trim();
+                      if (!v) return;
+                      if (!email && /@/.test(v)) {
+                        appendUser(v);
+                        (e.target as HTMLInputElement).value = "";
+                        setInput("");
+                        (async () => {
+                          const data = await callBrain({ provideEmail: { email: v } });
+                          await handleBrainResult(data);
+                        })();
                       } else {
-                        void handleSend(s.value);
+                        void handleSend(v);
                       }
-                    }}
-                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                    disabled={busy}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const v = (e.target as HTMLInputElement).value.trim();
-                    if (!v) return;
-                    if (!email && /@/.test(v)) {
-                      appendUser(v);
-                      (e.target as HTMLInputElement).value = "";
-                      setInput("");
-                      (async () => {
-                        const data = await callBrain({ provideEmail: { email: v } });
-                        await handleBrainResult(data);
-                      })();
-                    } else {
-                      void handleSend(v);
                     }
-                  }
-                }}
-                placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
-                className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50"
-                aria-label="Message input"
-              />
-              <button onClick={() => handleSend()} disabled={busy} className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50">
-                Send
-              </button>
-            </div>
+                  }}
+                  placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
+                  className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50"
+                  aria-label="Message input"
+                />
+                <button onClick={() => handleSend()} disabled={busy} className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50">
+                  Send
+                </button>
+              </div>
 
-            <div className="text-[10px] text-gray-500 mt-2">
-              By continuing, you agree to our TOS. Conversations may be logged to improve service.
+              <div className="text-[10px] text-gray-500 mt-2">
+                By continuing, you agree to our TOS. Conversations may be logged to improve service.
+              </div>
             </div>
           </div>
         </div>
