@@ -114,7 +114,7 @@ export default function ChatWidget() {
       setShowScheduler(true);
       setShowDayPicker(false);
       setSlots(data.slots);
-      setSuggestions([]); // show real slot buttons instead
+      setSuggestions([]);
       appendBot(data.text || "Pick a time:");
       return;
     }
@@ -132,7 +132,6 @@ export default function ChatWidget() {
 
     if (data.type === "text" && data.text) {
       appendBot(data.text);
-      // Offer gentle options, never push
       setSuggestions([
         { label: "Show times", value: "book a call" },
         { label: "Keep explaining", value: "please keep explaining" },
@@ -147,7 +146,6 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // ---- actions ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
@@ -194,7 +192,6 @@ export default function ChatWidget() {
     setSlots(null); setShowDayPicker(false); setShowScheduler(false); setPage(0); setAskedDayOnce(false);
   }
 
-  // ---- UI ----
   const dayButtons = nextNDays(14).map((d) => (
     <button
       key={d.toDateString()}
@@ -264,6 +261,9 @@ export default function ChatWidget() {
                     <div className="text-xs text-gray-600 mb-1">
                       {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
                     </div>
+                    <div className="text-[10px] text-gray-500 mb-2">
+                      All times shown in Eastern Time (ET).
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       {slots.map((s) => (
                         <button key={s.start} onClick={() => pickSlot(s)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
@@ -290,13 +290,11 @@ export default function ChatWidget() {
                     key={s.value}
                     onClick={async () => {
                       if (s.value === "book a call") {
-                        // DO NOT echo a user message; just open the scheduler calmly
                         setSuggestions([]);
                         setShowScheduler(true);
                         setShowDayPicker(true);
                         if (!askedDayOnce) { appendBot("Which day works for you?"); setAskedDayOnce(true); }
                       } else {
-                        // “Keep explaining”, “Pricing”, “Pay now”, etc.
                         void handleSend(s.value);
                       }
                     }}
