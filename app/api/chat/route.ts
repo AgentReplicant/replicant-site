@@ -20,22 +20,6 @@ function parseRules() {
   try { return JSON.parse(BOOKING_RULES_JSON); }
   catch { return { days:[1,2,3,4,5], startHour:10, endHour:16, slotMinutes:30, minLeadHours:2 }; }
 }
-
-function extractEmail(text: string): string | null {
-  const m = (text || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return m ? m[0] : null;
-}
-
-// IMPORTANT: do NOT treat generic “appointment(s)” as booking intent.
-// Only explicit “book / schedule / call / meeting / demo / time / slot”
-function detectIntent(message: string) {
-  const m = (message || "").toLowerCase();
-  if (/(pay|checkout|purchase|buy|subscribe|payment|pricing|price)/.test(m)) return "pay";
-  if (/(book|schedule|call|meeting|demo|pick a time|time slots?|see (available )?times?)/.test(m)) return "book";
-  if (/(email is|my email is|@)/.test(m)) return "email";
-  return "unknown";
-}
-
 function isoAt(y:number,m:number,d:number,h:number,min:number) {
   return new Date(Date.UTC(y, m-1, d, h, min, 0)).toISOString();
 }
@@ -43,6 +27,30 @@ function fmtLabel(iso: string) {
   return new Date(iso).toLocaleString("en-US", {
     timeZone: BOOKING_TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
   });
+}
+function extractEmail(t: string) {
+  const m = (t||"").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m ? m[0] : null;
+}
+function detectIntent(message: string) {
+  const m = (message || "").toLowerCase();
+
+  // pricing
+  if (/\b(price|pricing|cost|how much|monthly|per month)\b/.test(m)) return "pricing";
+
+  // capability “can you … whatsapp/instagram/appointments”
+  if (/(whatsapp|instagram).*appoint|auto.*book|automatic.*appoint|from instagram|from whatsapp/.test(m)) return "capability";
+
+  // explicit booking only (don’t trigger on the word “appointment” alone)
+  if (/\b(book|schedule|call|meeting|demo|pick a time|time slots?|see (available )?times?)\b/.test(m)) return "book";
+
+  // payment
+  if (/\b(pay|checkout|purchase|buy|subscribe|payment)\b/.test(m)) return "pay";
+
+  // email
+  if (/(email is|my email is|@)/.test(m)) return "email";
+
+  return "unknown";
 }
 
 function slotsForDate(y:number,m:number,d:number, page=0) {
@@ -66,12 +74,11 @@ function slotsForDate(y:number,m:number,d:number, page=0) {
 
 function nextWorkingDayWithSlots(y:number,m:number,d:number, max=14) {
   const rules = parseRules();
-  const allowed = rules.days?.length ? rules.days : [1,2,3,4,5]; // accept 1..7 or 0..6
+  const allowed = rules.days?.length ? rules.days : [1,2,3,4,5];
   const base = new Date(Date.UTC(y, m-1, d, 12, 0, 0));
   for (let i=0;i<=max;i++){
     const cand = new Date(base.getTime()+i*86400000);
     const oneBased = ((cand.getUTCDay()+6)%7)+1;
-    // treat both representations as allowed
     if (!(allowed.includes(cand.getUTCDay()) || allowed.includes(oneBased))) continue;
     const { slots } = slotsForDate(cand.getUTCFullYear(), cand.getUTCMonth()+1, cand.getUTCDate(), 0);
     if (slots.length) return { y:cand.getUTCFullYear(), m:cand.getUTCMonth()+1, d:cand.getUTCDate() };
@@ -79,13 +86,15 @@ function nextWorkingDayWithSlots(y:number,m:number,d:number, max=14) {
   return null;
 }
 
-// LLM: answer naturally; suggest next steps; never promise bookings.
+// LLM: Q&A only (no pushing)
 async function llmPlanReply(user: string, history: Msg[] | undefined) {
   if (!LLM_ENABLED) return null;
 
-  const sys = `You are Replicant’s sales agent. Be concise (1–3 sentences), helpful, and confident.
-Answer questions first. If appropriate, OFFER next steps (book/pay), but do not assume.
-Never claim anything is booked. Return STRICT JSON:
+  const sys = `You are Replicant’s sales agent.
+- Always answer the user's question first (polite, direct, 1–3 sentences).
+- You may OFFER to keep explaining here or book a call, but never assume they want to book.
+- Never claim you've emailed or booked anything.
+Return STRICT JSON only:
 {"reply":"<text>","action":{"type":"none|pay|book|email","email":"<optional>"}}`;
 
   const messages = [
@@ -97,7 +106,7 @@ Never claim anything is booked. Return STRICT JSON:
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "authorization": `Bearer ${process.env.OPENAI_API_KEY!}` },
-    body: JSON.stringify({ model: LLM_MODEL, temperature: 0.5, max_tokens: 220, messages }),
+    body: JSON.stringify({ model: LLM_MODEL, temperature: 0.4, max_tokens: 220, messages }),
     cache: "no-store"
   });
 
@@ -116,7 +125,7 @@ export async function POST(req: NextRequest) {
   const date = filters.date as { y:number, m:number, d:number } | undefined;
   const page = typeof filters.page === "number" ? filters.page : 0;
 
-  // Picked slot → book
+  // Slot picked → book
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
     const { start, end, email } = body.pickSlot;
     if (!email) return NextResponse.json({ type: "need_email", text: "What’s the best email for the calendar invite?" });
@@ -136,7 +145,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Provided email
+  // Email captured (acknowledge; don't auto-open scheduler)
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
     if (date) {
@@ -150,20 +159,30 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ type: "slots", text: "Great — pick a time that works:", email, slots, date, total });
     }
-    // don’t spam “which day works” here; the client will show a small chip
-    return NextResponse.json({ type: "text", text: "Thanks! When you’re ready, I can show available days to book." , email });
+    return NextResponse.json({ type: "text", text: `Thanks — I’ll use ${email}. If you’d like, I can show available days to book.` , email });
   }
 
   // Normal chat
   const message: string = body.message ?? "";
   const intent = detectIntent(message);
 
-  // Deterministic: pay
-  if (intent === "pay" && STRIPE_URL) {
-    return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
+  // Deterministic responses
+  if (intent === "pricing") {
+    const text =
+      "Yes — most clients launch at **$497 setup** + **$297/month**. That includes configuration, integrations, and ongoing tuning. We can keep chatting here, or I can show available times to walk you through live.";
+    return NextResponse.json({ type: "text", text });
   }
 
-  // Deterministic: booking only when explicitly asked
+  if (intent === "capability") {
+    const text =
+      "Yes — we can set up an agent that books appointments from WhatsApp or Instagram. It reads messages, qualifies, proposes times, and confirms the booking automatically. We can keep going here, or I can show times for a quick walkthrough.";
+    return NextResponse.json({ type: "text", text });
+  }
+
+  if (intent === "pay" && STRIPE_URL) {
+    return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below when you’re ready." });
+  }
+
   if (intent === "book") {
     if (date) {
       const { slots, total } = slotsForDate(date.y, date.m, date.d, page);
@@ -179,7 +198,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ type: "ask_day", text: "Which day works for you?" });
   }
 
-  // LLM: answer normally; may *suggest* next steps
+  // LLM fallback: answer; may *suggest* next steps
   const planned = await llmPlanReply(message, history);
   if (!planned) {
     return NextResponse.json({ type: "text", text: "Happy to help. Ask me anything; when you’re ready, I can show available days and times." });
@@ -190,14 +209,14 @@ export async function POST(req: NextRequest) {
   if (action?.type === "pay" && STRIPE_URL) {
     return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: reply || "You can complete payment below." });
   }
+  // If LLM suggests booking, return as plain text only. The client will show a subtle chip; we do not open scheduler here.
   if (action?.type === "book") {
-    // Do NOT open scheduler here; client will just show a subtle chip.
     return NextResponse.json({ type: "text", text: reply || "If you’d like, I can show available times." });
   }
   if (action?.type === "email") {
     const email = extractEmail(message) || action?.email;
-    if (email) return NextResponse.json({ type: "text", text: `Thanks — I’ll use ${email}. Say “show times” when you want to book.`, email });
+    if (email) return NextResponse.json({ type: "text", text: `Thanks — I’ll use ${email}. Want me to keep explaining here, or show times to talk live?`, email });
   }
 
-  return NextResponse.json({ type: "text", text: reply || "Got it — when you’re ready, I can show available times." });
+  return NextResponse.json({ type: "text", text: reply || "Got it. I can keep explaining here, or show available times whenever you want." });
 }

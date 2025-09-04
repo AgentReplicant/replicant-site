@@ -7,7 +7,7 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v4";
+const STORE_KEY = "replicant_chat_v5";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n=14) { const out: Date[] = []; const now = new Date(); for (let i=0;i<n;i++) out.push(new Date(now.getTime()+i*86400000)); return out; }
@@ -26,9 +26,10 @@ export default function ChatWidget() {
   const [showScheduler, setShowScheduler] = useState(false);
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [isTall, setIsTall] = useState(false);
-  const [askedDayOnce, setAskedDayOnce] = useState(false); // de-dupe
+  const [askedDayOnce, setAskedDayOnce] = useState(false);
   const [suggestions, setSuggestions] = useState([
     { label: "Show times", value: "book a call" },
+    { label: "Keep explaining", value: "please keep explaining" },
     { label: "Pricing", value: "how much is it?" },
     { label: "Pay now", value: "pay" },
   ]);
@@ -80,7 +81,6 @@ export default function ChatWidget() {
     setMessages((m) => [...m, { role: "bot", text, meta }]);
     historyRef.current.push({ role: "assistant", content: text });
   }
-
   async function callBrain(payload: any) {
     const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
     const res = await fetch("/api/chat", {
@@ -95,18 +95,15 @@ export default function ChatWidget() {
     if (data.email) setEmail(data.email);
 
     if (data.type === "ask_day") {
-      if (!askedDayOnce) {
-        appendBot(data.text || "Which day works for you?");
-        setAskedDayOnce(true);
-      }
+      if (!askedDayOnce) { appendBot(data.text || "Which day works for you?"); setAskedDayOnce(true); }
       if (showScheduler) setShowDayPicker(true);
-      else setSuggestions([{ label: "Pick a day", value: "book a call" }]); // subtle chip
+      else setSuggestions((chips) => [{ label: "Pick a day", value: "book a call" }, ...chips.filter(c => c.value !== "book a call")]);
       return;
     }
 
     if (data.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null); setShowScheduler(false); setShowDayPicker(false);
-      setSuggestions([{ label: "Show times", value: "book a call" }]);
+      setSuggestions([{ label: "Show times", value: "book a call" }, { label: "Keep explaining", value: "please keep explaining" }]);
       appendBot(data.text || "Here’s a secure checkout:");
       appendBot(`👉 ${data.url}`, { link: data.url });
       return;
@@ -117,7 +114,7 @@ export default function ChatWidget() {
       setShowScheduler(true);
       setShowDayPicker(false);
       setSlots(data.slots);
-      setSuggestions([]); // real options
+      setSuggestions([]); // show real slot buttons instead
       appendBot(data.text || "Pick a time:");
       return;
     }
@@ -135,9 +132,10 @@ export default function ChatWidget() {
 
     if (data.type === "text" && data.text) {
       appendBot(data.text);
-      // Keep suggestions minimal; don’t force scheduling
+      // Offer gentle options, never push
       setSuggestions([
         { label: "Show times", value: "book a call" },
+        { label: "Keep explaining", value: "please keep explaining" },
         { label: "Pricing", value: "how much is it?" },
         { label: "Pay now", value: "pay" },
       ]);
@@ -160,9 +158,7 @@ export default function ChatWidget() {
     try {
       const data = await callBrain({ message: val });
       await handleBrainResult(data);
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   }
 
   async function pickSlot(slot: Slot) {
@@ -236,11 +232,7 @@ export default function ChatWidget() {
               <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"}`}>
                   <div>{m.text}</div>
-                  {m.meta?.link && (
-                    <div className="mt-1">
-                      <a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">{m.meta.link}</a>
-                    </div>
-                  )}
+                  {m.meta?.link && <div className="mt-1"><a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">{m.meta.link}</a></div>}
                 </div>
               </div>
             ))}
@@ -274,7 +266,7 @@ export default function ChatWidget() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {slots.map((s) => (
-                        <button key={s.start} onClick={() => pickSlot(s)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy} title={`${new Date(s.start).toLocaleString("en-US", { timeZone: "America/New_York" })}`}>
+                        <button key={s.start} onClick={() => pickSlot(s)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
                           {s.label}
                         </button>
                       ))}
@@ -297,13 +289,14 @@ export default function ChatWidget() {
                   <button
                     key={s.value}
                     onClick={async () => {
-                      if (s.value.toLowerCase().includes("book")) {
-                        // DO NOT append a user message—just open scheduler calmly
+                      if (s.value === "book a call") {
+                        // DO NOT echo a user message; just open the scheduler calmly
                         setSuggestions([]);
                         setShowScheduler(true);
                         setShowDayPicker(true);
                         if (!askedDayOnce) { appendBot("Which day works for you?"); setAskedDayOnce(true); }
                       } else {
+                        // “Keep explaining”, “Pricing”, “Pay now”, etc.
                         void handleSend(s.value);
                       }
                     }}
