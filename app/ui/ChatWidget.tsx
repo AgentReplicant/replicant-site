@@ -7,7 +7,7 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v6";
+const STORE_KEY = "replicant_chat_v7";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n=14) { const out: Date[] = []; const now = new Date(); for (let i=0;i<n;i++) out.push(new Date(now.getTime()+i*86400000)); return out; }
@@ -28,7 +28,7 @@ export default function ChatWidget() {
   const [isTall, setIsTall] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
   const [suggestions, setSuggestions] = useState([
-    { label: "Show times", value: "book a call" },
+    { label: "Pick a day", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
     { label: "Pricing", value: "how much is it?" },
     { label: "Pay now", value: "pay now" },
@@ -36,7 +36,7 @@ export default function ChatWidget() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // ---- Persistence ----
+  // load from storage
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORE_KEY);
@@ -61,36 +61,22 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // auto-scroll
+  // autoscroll
   useEffect(() => { const el = wrapRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, busy, slots, showDayPicker, showScheduler, isTall]);
 
   // persist
   useEffect(() => {
     try {
-      localStorage.setItem(
-        STORE_KEY,
-        JSON.stringify({ messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, suggestions })
-      );
+      localStorage.setItem(STORE_KEY, JSON.stringify({ messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, suggestions }));
     } catch {}
   }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, suggestions]);
 
-  // ---- helpers ----
-  function appendUser(text: string) {
-    setMessages((m) => [...m, { role: "user", text }]);
-    historyRef.current.push({ role: "user", content: text });
-  }
-  function appendBot(text: string, meta?: { link?: string }) {
-    setMessages((m) => [...m, { role: "bot", text, meta }]);
-    historyRef.current.push({ role: "assistant", content: text });
-  }
+  function appendUser(text: string) { setMessages((m) => [...m, { role: "user", text }]); historyRef.current.push({ role: "user", content: text }); }
+  function appendBot(text: string, meta?: { link?: string }) { setMessages((m) => [...m, { role: "bot", text, meta }]); historyRef.current.push({ role: "assistant", content: text }); }
 
   async function callBrain(payload: any) {
     const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
-    });
+    const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, history: historyRef.current, filters }) });
     return res.json();
   }
 
@@ -99,52 +85,33 @@ export default function ChatWidget() {
 
     if (data.type === "ask_day") {
       if (!askedDayOnce) { appendBot(data.text || "Which day works for you?"); setAskedDayOnce(true); }
-      if (showScheduler) setShowDayPicker(true);
-      else setSuggestions((chips) => [{ label: "Pick a day", value: "book a call" }, ...chips.filter(c => c.value !== "book a call")]);
+      setShowScheduler(true); setShowDayPicker(true);
       return;
     }
 
     if (data.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null); setShowScheduler(false); setShowDayPicker(false);
-      // keep talking; do not “close” the convo
-      setSuggestions([
-        { label: "Show times", value: "book a call" },
-        { label: "Keep explaining", value: "please keep explaining" },
-      ]);
-      appendBot(data.text || "Here’s a secure checkout:");
-      appendBot(`👉 ${data.url}`, { link: data.url });
-      return;
+      setSuggestions([{ label: "Pick a day", value: "book a call" }, { label: "Keep explaining", value: "please keep explaining" }]);
+      appendBot(data.text || "Here’s a secure checkout:"); appendBot(`👉 ${data.url}`, { link: data.url }); return;
     }
 
     if (data.type === "slots" && Array.isArray(data.slots)) {
       if (data.date) setDate(data.date);
-      setShowScheduler(true);
-      setShowDayPicker(false);
-      setSlots(data.slots);
-      setSuggestions([]); // real options appear as slot buttons
-      appendBot(data.text || "Pick a time:");
-      return;
+      setShowScheduler(true); setShowDayPicker(false); setSlots(data.slots); setSuggestions([]);
+      appendBot(data.text || "Pick a time:"); return;
     }
 
     if (data.type === "need_email") { appendBot(data.text || "What email should I use for the calendar invite?"); return; }
 
     if (data.type === "booked") {
-      setSlots(null); setShowScheduler(false); setShowDayPicker(false);
-      setSuggestions([]);
-      const when = data.when ? ` (${data.when})` : "";
-      const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
-      appendBot(`All set!${when}${meet}`);
-      return;
+      setSlots(null); setShowScheduler(false); setShowDayPicker(false); setSuggestions([]);
+      const when = data.when ? ` (${data.when})` : ""; const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
+      appendBot(`All set!${when}${meet}`); return;
     }
 
     if (data.type === "text" && data.text) {
       appendBot(data.text);
-      setSuggestions([
-        { label: "Show times", value: "book a call" },
-        { label: "Keep explaining", value: "please keep explaining" },
-        { label: "Pricing", value: "how much is it?" },
-        { label: "Pay now", value: "pay now" },
-      ]);
+      setSuggestions([{ label: "Pick a day", value: "book a call" }, { label: "Keep explaining", value: "please keep explaining" }, { label: "Pricing", value: "how much is it?" }, { label: "Pay now", value: "pay now" }]);
       return;
     }
 
@@ -152,61 +119,35 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // ---- actions ----
   async function handleSend(text?: string) {
-    const val = (text ?? input).trim();
-    if (!val || busy) return;
-
-    appendUser(val);
-    setInput("");
-    setBusy(true);
-    try {
-      const data = await callBrain({ message: val });
-      await handleBrainResult(data);
-    } finally { setBusy(false); }
+    const val = (text ?? input).trim(); if (!val || busy) return;
+    appendUser(val); setInput(""); setBusy(true);
+    try { const data = await callBrain({ message: val }); await handleBrainResult(data); } finally { setBusy(false); }
   }
 
   async function pickSlot(slot: Slot) {
     if (!email) { appendBot("Great — what’s the best email for the invite?"); return; }
     setBusy(true);
-    try {
-      const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } });
-      await handleBrainResult(data);
-    } finally { setBusy(false); }
+    try { const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } }); await handleBrainResult(data); }
+    finally { setBusy(false); }
   }
 
   async function chooseDay(d: Date) {
-    const { y, m, d: dd } = ymd(d);
-    setDate({ y, m, d: dd });
-    setPage(0);
-    setBusy(true);
-    try {
-      const data = await callBrain({ message: "book a call" });
-      await handleBrainResult(data);
-    } finally { setBusy(false); }
+    const { y, m, d: dd } = ymd(d); setDate({ y, m, d: dd }); setPage(0); setBusy(true);
+    try { const data = await callBrain({ message: "book a call" }); await handleBrainResult(data); }
+    finally { setBusy(false); }
   }
 
   async function showMoreTimes() {
-    setPage((p) => p + 1);
-    setBusy(true);
-    try {
-      const data = await callBrain({ message: "book a call" });
-      await handleBrainResult(data);
-    } finally { setBusy(false); }
+    setPage((p) => p + 1); setBusy(true);
+    try { const data = await callBrain({ message: "book a call" }); await handleBrainResult(data); }
+    finally { setBusy(false); }
   }
 
-  function resetSchedulingUI() {
-    setSlots(null); setShowDayPicker(false); setShowScheduler(false); setPage(0); setAskedDayOnce(false);
-  }
+  function resetSchedulingUI() { setSlots(null); setShowDayPicker(false); setShowScheduler(false); setPage(0); setAskedDayOnce(false); }
 
   const dayButtons = nextNDays(14).map((d) => (
-    <button
-      key={d.toDateString()}
-      onClick={() => chooseDay(d)}
-      className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${date && d.toDateString() === new Date(date.y, date.m-1, date.d).toDateString() ? "bg-black text-white" : ""}`}
-      disabled={busy}
-      title={d.toLocaleDateString()}
-    >
+    <button key={d.toDateString()} onClick={() => chooseDay(d)} className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${date && d.toDateString() === new Date(date.y, date.m-1, date.d).toDateString() ? "bg-black text-white" : ""}`} disabled={busy} title={d.toLocaleDateString()}>
       {dayLabel(d)}
     </button>
   ));
@@ -220,22 +161,22 @@ export default function ChatWidget() {
       )}
 
       {open && (
-        <div
-          className={`fixed bottom-6 right-6 z-[1000] w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden`}
-          style={{ height: isTall ? "80vh" : "620px" }}
-        >
-          {/* Flex column to avoid dead space */}
+        <div className="fixed bottom-6 right-6 z-[1000] w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden"
+             style={{ height: isTall ? "80vh" : "620px" }}>
+          {/* FULL FLEX COLUMN (prevents dead space) */}
           <div className="h-full flex flex-col">
             {/* Header */}
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
               <div className="font-semibold text-sm">Replicant Assistant</div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setIsTall((v)=>!v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">{isTall ? "▭" : "▮▮"}</button>
+                <button onClick={() => setIsTall((v)=>!v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">
+                  {isTall ? "Minimize" : "Maximize"}
+                </button>
                 <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
               </div>
             </div>
 
-            {/* Messages */}
+            {/* Messages (flex-1 fills remaining height) */}
             <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
               {messages.map((m, i) => (
                 <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -246,7 +187,7 @@ export default function ChatWidget() {
                 </div>
               ))}
 
-              {/* Collapsible scheduler */}
+              {/* Scheduler */}
               {showScheduler && (
                 <div className="mt-3 border border-gray-200 bg-white rounded-xl">
                   <div className="flex items-center justify-between px-3 py-2 border-b">
@@ -291,7 +232,7 @@ export default function ChatWidget() {
               {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
             </div>
 
-            {/* Input + quick actions */}
+            {/* Input + chips */}
             <div className="bg-white border-t p-2 shrink-0">
               {suggestions.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-2">
@@ -300,13 +241,9 @@ export default function ChatWidget() {
                       key={s.value}
                       onClick={async () => {
                         if (s.value === "book a call") {
-                          setSuggestions([]);
-                          setShowScheduler(true);
-                          setShowDayPicker(true);
+                          setSuggestions([]); setShowScheduler(true); setShowDayPicker(true);
                           if (!askedDayOnce) { appendBot("Which day works for you?"); setAskedDayOnce(true); }
-                        } else {
-                          void handleSend(s.value);
-                        }
+                        } else { void handleSend(s.value); }
                       }}
                       className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                       disabled={busy}
@@ -323,19 +260,11 @@ export default function ChatWidget() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      const v = (e.target as HTMLInputElement).value.trim();
-                      if (!v) return;
+                      const v = (e.target as HTMLInputElement).value.trim(); if (!v) return;
                       if (!email && /@/.test(v)) {
-                        appendUser(v);
-                        (e.target as HTMLInputElement).value = "";
-                        setInput("");
-                        (async () => {
-                          const data = await callBrain({ provideEmail: { email: v } });
-                          await handleBrainResult(data);
-                        })();
-                      } else {
-                        void handleSend(v);
-                      }
+                        appendUser(v); (e.target as HTMLInputElement).value = ""; setInput("");
+                        (async () => { const data = await callBrain({ provideEmail: { email: v } }); await handleBrainResult(data); })();
+                      } else { void handleSend(v); }
                     }
                   }}
                   placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
