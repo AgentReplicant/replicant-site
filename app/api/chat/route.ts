@@ -17,11 +17,8 @@ const LLM_MODEL = process.env.LLM_MODEL || "gpt-4o-mini";
 
 // ====== HELPERS ======
 function parseRules() {
-  try {
-    return JSON.parse(BOOKING_RULES_JSON);
-  } catch {
-    return { days: [1, 2, 3, 4, 5], startHour: 10, endHour: 16, slotMinutes: 30, minLeadHours: 2 };
-  }
+  try { return JSON.parse(BOOKING_RULES_JSON); }
+  catch { return { days:[1,2,3,4,5], startHour:10, endHour:16, slotMinutes:30, minLeadHours:2 }; }
 }
 function extractEmail(text: string): string | null {
   const m = (text || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
@@ -35,11 +32,9 @@ function detectIntent(message: string) {
   return "unknown";
 }
 
-// Robust slot generator: always returns options (falls back if rules exclude all)
+// Always returns options; falls back if rules exclude everything
 function nextSlots(targetCount = 5) {
-  const rules = parseRules();
-  const { days = [1,2,3,4,5], startHour = 10, endHour = 16, slotMinutes = 30, minLeadHours = 2 } = rules;
-
+  const { days = [1,2,3,4,5], startHour = 10, endHour = 16, slotMinutes = 30, minLeadHours = 2 } = parseRules();
   const now = new Date();
   const minLeadMs = minLeadHours * 3600_000;
 
@@ -65,24 +60,20 @@ function nextSlots(targetCount = 5) {
     for (let H = startHour; H < endHour && out.length < targetCount; H++) {
       for (let M = 0; M < 60 && out.length < targetCount; M += slotMinutes) {
         const startISO = toTZISO(y, m, d, H, M);
-        const endISO = toTZISO(y, m, d, H, M + slotMinutes);
+        const endISO   = toTZISO(y, m, d, H, M + slotMinutes);
         if (new Date(startISO).getTime() - now.getTime() < minLeadMs) continue;
 
         const label = new Date(startISO).toLocaleString("en-US", {
-          timeZone: BOOKING_TZ,
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
+          timeZone: BOOKING_TZ, weekday: "short", month: "short", day: "numeric",
+          hour: "numeric", minute: "2-digit"
         });
         out.push({ start: startISO, end: endISO, label });
       }
     }
   }
 
+  // Hard fallback: rolling hourly options starting 3h from now
   if (out.length === 0) {
-    // Hard fallback: rolling hourly options starting 3h from now
     const seed = new Date(now.getTime() + Math.max(minLeadMs, 3 * 3600_000));
     for (let i = 0; i < targetCount; i++) {
       const s = new Date(seed.getTime() + i * 60 * 60 * 1000);
@@ -91,12 +82,8 @@ function nextSlots(targetCount = 5) {
         start: s.toISOString(),
         end: e.toISOString(),
         label: s.toLocaleString("en-US", {
-          timeZone: BOOKING_TZ,
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
+          timeZone: BOOKING_TZ, weekday: "short", month: "short", day: "numeric",
+          hour: "numeric", minute: "2-digit"
         }),
       });
     }
@@ -104,27 +91,25 @@ function nextSlots(targetCount = 5) {
   return out.slice(0, targetCount);
 }
 
-// ====== LLM LAYER ======
-// We ask the LLM to both answer like a human AND suggest an optional action.
+// ====== LLM (plan + reply) ======
 async function llmPlanReply(user: string, history: Msg[] | undefined) {
   if (!LLM_ENABLED) return null;
 
   const sys =
 `You are Replicant’s sales agent. Be concise (1–3 sentences), helpful, and confident.
-Goals: answer naturally, qualify lightly, then guide toward either booking a call or paying.
-If the user asks for times, pricing, features, objections, comparisons, or support, respond appropriately.
-Output strictly in JSON:
+Answer normally, handle objections, and guide toward booking or payment.
+Return STRICT JSON only:
 
 {
-  "reply": "<natural language to show the user>",
+  "reply": "<natural text>",
   "action": {"type": "none" | "pay" | "book" | "email", "email": "<optional>"}
 }
 
-Rules:
-- Prefer "book" when the user hints at meeting or times.
-- Prefer "pay" only when the user is ready to purchase.
-- Use "email" when the user provides or asks to give an email.
-- Never fabricate links; don't mention a payment link unless 'pay' is chosen.`;
+Hard rules:
+- Do NOT claim anything is booked or “I sent a confirmation”.
+- If action is "book": do NOT state a specific time; invite them to pick a time below.
+- If action is "pay": mention that a secure checkout is available below.
+- Never fabricate links.`;
 
   const messages = [
     { role: "system" as Role, content: sys },
@@ -138,12 +123,7 @@ Rules:
       "content-type": "application/json",
       "authorization": `Bearer ${process.env.OPENAI_API_KEY!}`
     },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      temperature: 0.5,
-      max_tokens: 220,
-      messages
-    }),
+    body: JSON.stringify({ model: LLM_MODEL, temperature: 0.5, max_tokens: 220, messages }),
     cache: "no-store"
   });
 
@@ -151,7 +131,6 @@ Rules:
   const raw = json?.choices?.[0]?.message?.content?.trim();
   if (!raw) return null;
 
-  // Try to parse JSON; if the model wrapped it in text, extract the first JSON block.
   const match = raw.match(/\{[\s\S]*\}/);
   const text = match ? match[0] : raw;
   try {
@@ -159,8 +138,7 @@ Rules:
     if (parsed && typeof parsed.reply === "string" && parsed.action?.type) {
       return parsed as { reply: string; action: { type: "none" | "pay" | "book" | "email"; email?: string } };
     }
-  } catch { /* swallow */ }
-  // Fallback: treat as plain reply, no action
+  } catch {}
   return { reply: raw, action: { type: "none" as const } };
 }
 
@@ -169,14 +147,11 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const history: Msg[] | undefined = body.history;
 
-  // 1) Picking a slot directly
+  // Slot picked → real booking
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
     const { start, end, email } = body.pickSlot;
     if (!email) {
-      return NextResponse.json({
-        type: "need_email",
-        text: "Got it — what’s the best email for the calendar invite?"
-      });
+      return NextResponse.json({ type: "need_email", text: "What’s the best email for the calendar invite?" });
     }
     try {
       const res = await fetch(`${SITE_BASE}${SCHEDULE_API_PATH}`, {
@@ -192,7 +167,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({
         type: "booked",
-        text: `All set — you’re booked for ${when}. I’ve emailed the invite.`,
+        text: `Booked — you’re on the calendar for ${when}. I’ve emailed the invite.`,
         meetLink: data?.meetLink,
         when
       });
@@ -201,29 +176,29 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 2) Email provided
+  // Email provided → show slots
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
     const slots = nextSlots(5);
     return NextResponse.json({ type: "slots", text: "Perfect — pick a time that works:", email, slots });
   }
 
-  // 3) Normal chat message
+  // Regular chat
   const message: string = body.message ?? "";
   const intent = detectIntent(message);
 
-  // First ask the LLM for a plan (natural reply + suggested action)
+  // Try LLM plan first
   const planned = await llmPlanReply(message, history);
 
-  // If LLM is off, or returns nothing, fall back to deterministic intents
   if (!planned) {
+    // Deterministic fallbacks
     if (intent === "pay" && STRIPE_URL) {
       return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
     }
     if (intent === "book") {
       const email = extractEmail(message) || undefined;
       const slots = nextSlots(5);
-      return NextResponse.json({ type: "slots", text: email ? `Got it (${email}). Pick a time:` : "Happy to book a quick demo — pick a time:", email, slots });
+      return NextResponse.json({ type: "slots", text: email ? `Got it (${email}). Pick a time:` : "Pick a time that works:", email, slots });
     }
     if (intent === "email") {
       const email = extractEmail(message);
@@ -233,12 +208,12 @@ export async function POST(req: NextRequest) {
       }
     }
     const slots = nextSlots(5);
-    return NextResponse.json({ type: "slots", text: "I can book you in or get you set up. Here are some times:", slots });
+    return NextResponse.json({ type: "slots", text: "I can help with questions or get something on the calendar. Here are some times:", slots });
   }
 
-  // LLM path: send natural reply, then route action if suggested
   const { reply, action } = planned;
 
+  // Route actions with SAFE copy (no promises unless booked)
   if (action?.type === "pay" && STRIPE_URL) {
     return NextResponse.json({
       type: "action",
@@ -251,24 +226,16 @@ export async function POST(req: NextRequest) {
   if (action?.type === "book") {
     const email = extractEmail(message) || action?.email;
     const slots = nextSlots(5);
-    return NextResponse.json({
-      type: "slots",
-      text: reply || (email ? `Got it (${email}). Pick a time:` : "Pick a time that works:"),
-      email,
-      slots
-    });
+    const safe = "Happy to lock a time — pick one below:";
+    return NextResponse.json({ type: "slots", text: safe, email, slots });
   }
 
   if (action?.type === "email") {
     const email = extractEmail(message) || action?.email;
     if (email) {
       const slots = nextSlots(5);
-      return NextResponse.json({
-        type: "slots",
-        text: reply || `Perfect — I’ll use ${email}. Choose a time:`,
-        email,
-        slots
-      });
+      const safe = `Perfect — I’ll use ${email}. Choose a time:`;
+      return NextResponse.json({ type: "slots", text: safe, email, slots });
     }
   }
 

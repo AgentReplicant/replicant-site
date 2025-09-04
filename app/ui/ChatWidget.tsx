@@ -21,14 +21,13 @@ export default function ChatWidget() {
   ]);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Keep a lightweight history for the LLM (server truncates safely)
+  // Lightweight history for LLM (server truncates)
   const historyRef = useRef<Hist>([]);
 
-  // Auto-welcome when opened + ask the brain immediately
+  // Welcome only (NO auto-send "hi")
   useEffect(() => {
     if (open && messages.length === 0) {
       setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
-      void handleSend("hi"); // trigger default plan (typically shows times)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -81,10 +80,7 @@ export default function ChatWidget() {
 
     if (data.type === "booked") {
       setSlots(null);
-      setSuggestions([
-        { label: "Book another time", value: "book a call" },
-        { label: "Pay now", value: "pay" },
-      ]);
+      setSuggestions([]); // ⟵ clear suggestions after a confirmed booking
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
