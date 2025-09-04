@@ -7,7 +7,7 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v7";
+const STORE_KEY = "replicant_chat_v8";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n=14) { const out: Date[] = []; const now = new Date(); for (let i=0;i<n;i++) out.push(new Date(now.getTime()+i*86400000)); return out; }
@@ -27,6 +27,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [isTall, setIsTall] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
+  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // <— holds slot waiting for email
   const [suggestions, setSuggestions] = useState([
     { label: "Pick a day", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
@@ -36,7 +37,6 @@ export default function ChatWidget() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // load from storage
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORE_KEY);
@@ -51,6 +51,7 @@ export default function ChatWidget() {
         setShowDayPicker(s.showDayPicker ?? false);
         setIsTall(s.isTall ?? false);
         setAskedDayOnce(s.askedDayOnce ?? false);
+        setPendingSlot(s.pendingSlot ?? null);
         setSuggestions(s.suggestions ?? suggestions);
       } else {
         setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
@@ -61,15 +62,16 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // autoscroll
   useEffect(() => { const el = wrapRef.current; if (el) el.scrollTop = el.scrollHeight; }, [messages, busy, slots, showDayPicker, showScheduler, isTall]);
 
-  // persist
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, suggestions }));
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, pendingSlot, suggestions })
+      );
     } catch {}
-  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, suggestions]);
+  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, pendingSlot, suggestions]);
 
   function appendUser(text: string) { setMessages((m) => [...m, { role: "user", text }]); historyRef.current.push({ role: "user", content: text }); }
   function appendBot(text: string, meta?: { link?: string }) { setMessages((m) => [...m, { role: "bot", text, meta }]); historyRef.current.push({ role: "assistant", content: text }); }
@@ -83,9 +85,10 @@ export default function ChatWidget() {
   async function handleBrainResult(data: any) {
     if (data.email) setEmail(data.email);
 
-    if (data.type === "ask_day") {
-      if (!askedDayOnce) { appendBot(data.text || "Which day works for you?"); setAskedDayOnce(true); }
-      setShowScheduler(true); setShowDayPicker(true);
+    if (data.type === "need_email") {
+      // server also sends {start,end}; remember as pending
+      if (data.start && data.end) setPendingSlot({ start: data.start, end: data.end, label: data.when || "selected time" });
+      appendBot(data.text || "What email should I use for the calendar invite?");
       return;
     }
 
@@ -101,10 +104,8 @@ export default function ChatWidget() {
       appendBot(data.text || "Pick a time:"); return;
     }
 
-    if (data.type === "need_email") { appendBot(data.text || "What email should I use for the calendar invite?"); return; }
-
     if (data.type === "booked") {
-      setSlots(null); setShowScheduler(false); setShowDayPicker(false); setSuggestions([]);
+      setSlots(null); setShowScheduler(false); setShowDayPicker(false); setSuggestions([]); setPendingSlot(null);
       const when = data.when ? ` (${data.when})` : ""; const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`); return;
     }
@@ -121,12 +122,33 @@ export default function ChatWidget() {
 
   async function handleSend(text?: string) {
     const val = (text ?? input).trim(); if (!val || busy) return;
-    appendUser(val); setInput(""); setBusy(true);
-    try { const data = await callBrain({ message: val }); await handleBrainResult(data); } finally { setBusy(false); }
+
+    // If user typed an email, store & (if pendingSlot) auto-book
+    if (!email && /@/.test(val)) {
+      appendUser(val);
+      setInput("");
+      setBusy(true);
+      try {
+        const saved = await callBrain({ provideEmail: { email: val } });
+        await handleBrainResult(saved);
+        if (pendingSlot) {
+          // auto-book the held slot now that we have email
+          const booked = await callBrain({ pickSlot: { start: pendingSlot.start, end: pendingSlot.end, email: val } });
+          await handleBrainResult(booked);
+        }
+      } finally { setBusy(false); }
+      return;
+    }
+
+    appendUser(val);
+    setInput("");
+    setBusy(true);
+    try { const data = await callBrain({ message: val }); await handleBrainResult(data); }
+    finally { setBusy(false); }
   }
 
   async function pickSlot(slot: Slot) {
-    if (!email) { appendBot("Great — what’s the best email for the invite?"); return; }
+    if (!email) { setPendingSlot(slot); appendBot("Great — what’s the best email for the invite?"); return; }
     setBusy(true);
     try { const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } }); await handleBrainResult(data); }
     finally { setBusy(false); }
@@ -144,7 +166,7 @@ export default function ChatWidget() {
     finally { setBusy(false); }
   }
 
-  function resetSchedulingUI() { setSlots(null); setShowDayPicker(false); setShowScheduler(false); setPage(0); setAskedDayOnce(false); }
+  function resetSchedulingUI() { setSlots(null); setShowDayPicker(false); setShowScheduler(false); setPage(0); setAskedDayOnce(false); setPendingSlot(null); }
 
   const dayButtons = nextNDays(14).map((d) => (
     <button key={d.toDateString()} onClick={() => chooseDay(d)} className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${date && d.toDateString() === new Date(date.y, date.m-1, date.d).toDateString() ? "bg-black text-white" : ""}`} disabled={busy} title={d.toLocaleDateString()}>
@@ -163,7 +185,6 @@ export default function ChatWidget() {
       {open && (
         <div className="fixed bottom-6 right-6 z-[1000] w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden"
              style={{ height: isTall ? "80vh" : "620px" }}>
-          {/* FULL FLEX COLUMN (prevents dead space) */}
           <div className="h-full flex flex-col">
             {/* Header */}
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
@@ -176,7 +197,7 @@ export default function ChatWidget() {
               </div>
             </div>
 
-            {/* Messages (flex-1 fills remaining height) */}
+            {/* Messages */}
             <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
               {messages.map((m, i) => (
                 <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -258,15 +279,7 @@ export default function ChatWidget() {
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      const v = (e.target as HTMLInputElement).value.trim(); if (!v) return;
-                      if (!email && /@/.test(v)) {
-                        appendUser(v); (e.target as HTMLInputElement).value = ""; setInput("");
-                        (async () => { const data = await callBrain({ provideEmail: { email: v } }); await handleBrainResult(data); })();
-                      } else { void handleSend(v); }
-                    }
-                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value); }}
                   placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50"
                   aria-label="Message input"

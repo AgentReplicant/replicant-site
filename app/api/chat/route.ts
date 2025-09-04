@@ -40,6 +40,7 @@ function parseDay(message: string): { y:number,m:number,d:number } | null {
   for (let add=1; add<=14; add++) { const cand=new Date(now.getTime()+add*86400000); if (cand.getDay()===want) return { y:cand.getFullYear(), m:cand.getMonth()+1, d:cand.getDate() }; }
   return null;
 }
+
 function parseTime(message: string): { h:number, min:number } | null {
   const m = (message||"").toLowerCase();
   const r = /(?:\b|@)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/;
@@ -49,26 +50,30 @@ function parseTime(message: string): { h:number, min:number } | null {
   return { h, min };
 }
 
+// Intent detection — check “day+time” FIRST, and treat “can I book … at …” as booking.
 function detectIntent(message: string) {
   const m = (message || "").toLowerCase();
 
-  // pricing
-  if (/\b(price|pricing|cost|how much|monthly|per month)\b/.test(m)) return "pricing";
+  // 1) exact booking by natural phrase
+  const hasDay = !!parseDay(message);
+  const hasTime = !!parseTime(message);
+  if (hasDay && hasTime) return "book_exact";
+  if (/can\s+i\s+book.*\b(at|@)\b/.test(m) && (hasDay || hasTime)) return "book_exact";
 
-  // capability (mentions of booking ability without personal intent)
+  // 2) pricing or capability Qs (don’t schedule)
+  if (/\b(price|pricing|cost|how much|monthly|per month)\b/.test(m)) return "pricing";
   if (/(can|could|able to).*\bbook\b/.test(m)) return "capability";
   if (/(whatsapp|instagram).*appoint|auto.*book|automatic.*appoint|from instagram|from whatsapp/.test(m)) return "capability";
 
-  // explicit payment (softer)
+  // 3) explicit checkout intent only
   if (/\b(pay now|pay\b|checkout|sign ?up|subscribe|buy)\b/.test(m)) return "pay";
 
-  // explicit personal booking intent only
-  const wantsBooking = /\b(see (available )?times?|pick a time|book (a )?(call|meeting|demo)|schedule (a )?(call|meeting|demo))\b/.test(m);
-  if (parseDay(message) && parseTime(message)) return "book_exact";
-  if (wantsBooking) return "book";
-  if (parseDay(message) && !parseTime(message)) return "book"; // “Friday” etc.
+  // 4) user wants to see/choose slots
+  if (/\b(see (available )?times?|pick a time|book (a )?(call|meeting|demo)|schedule (a )?(call|meeting|demo))\b/.test(m)) return "book";
+  if (hasDay) return "book"; // “friday?”
 
   if (/(email is|my email is|@)/.test(m)) return "email";
+
   return "unknown";
 }
 
@@ -96,13 +101,13 @@ async function tryBookExact(date: {y:number,m:number,d:number}, hm: {h:number,mi
   } catch { return { error:true }; }
 }
 
-// ---------- LLM (answer-first) ----------
+// ---------- LLM ----------
 async function llmPlanReply(user: string, history: Msg[] | undefined) {
   if (!LLM_ENABLED) return null;
   const sys = `You are Replicant’s sales agent.
-- Answer the question first (1–3 sentences), polite and clear.
-- Offer to keep explaining or show times; do not push.
-- Do not claim you booked or emailed.
+- Answer the user’s question first (1–3 sentences).
+- Offer to keep explaining or show times; never push.
+- Don’t claim you booked/emailed.
 Return STRICT JSON:
 {"reply":"<text>","action":{"type":"none|pay|book|email","email":"<optional>"}}`;
   const messages = [
@@ -134,7 +139,7 @@ export async function POST(req: NextRequest) {
   // picked slot
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
     const { start, end, email } = body.pickSlot;
-    if (!email) return NextResponse.json({ type:"need_email", text:"What’s the best email for the calendar invite?" });
+    if (!email) return NextResponse.json({ type:"need_email", text:"What’s the best email for the calendar invite?", start, end });
     try {
       const res = await fetch(`${SITE_BASE}${SCHEDULE_API_PATH}`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ start, end, email }), cache:"no-store" });
       const data = await res.json();
@@ -148,17 +153,18 @@ export async function POST(req: NextRequest) {
   // email provided
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
+    // (widget will auto-book if it had a pending slot; otherwise we show slots/day as before)
     if (dateFilter) {
       const { slots, total } = slotsForDate(dateFilter.y, dateFilter.m, dateFilter.d, page);
-      return NextResponse.json({ type:"slots", text: slots.length ? "Great — pick a time that works (ET):" : "No openings that day — here’s the next available (ET):", email, slots: slots.length ? slots : slotsForDate(dateFilter.y, dateFilter.m, dateFilter.d+1, 0).slots, date: dateFilter, total });
+      return NextResponse.json({ type:"slots", text: slots.length ? "Great — pick a time that works (ET):" : "No openings that day — here’s the next available (ET):", email, slots, date: dateFilter, total });
     }
-    return NextResponse.json({ type:"text", text:`Thanks — I’ll use ${email}. When you say a day (e.g., Friday), I’ll show the available times (ET).`, email });
+    return NextResponse.json({ type:"text", text:`Thanks — I’ll use ${email}. Say a day (e.g., Friday) and I’ll show open times (ET).`, email });
   }
 
   const message: string = body.message ?? "";
   const intent = detectIntent(message);
 
-  // day + time in one go
+  // natural “day + time” → book
   if (intent === "book_exact") {
     const day = parseDay(message)!; const hm = parseTime(message)!; const email = latestEmail(history) || extractEmail(message);
     const res = await tryBookExact(day, hm, email || undefined);
