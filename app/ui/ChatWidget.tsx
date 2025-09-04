@@ -7,7 +7,7 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v2";
+const STORE_KEY = "replicant_chat_v3";
 
 type DateFilter = { y: number; m: number; d: number } | null;
 
@@ -33,7 +33,9 @@ export default function ChatWidget() {
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [date, setDate] = useState<DateFilter>(null);
   const [page, setPage] = useState(0);
+  const [showScheduler, setShowScheduler] = useState(false); // collapsible panel
   const [showDayPicker, setShowDayPicker] = useState(false);
+  const [isTall, setIsTall] = useState(false); // maximize height
   const [suggestions, setSuggestions] = useState([
     { label: "See available times", value: "book a call" },
     { label: "Pricing", value: "how much is it?" },
@@ -53,7 +55,9 @@ export default function ChatWidget() {
         setSlots(s.slots ?? null);
         setDate(s.date ?? null);
         setPage(s.page ?? 0);
+        setShowScheduler(s.showScheduler ?? false);
         setShowDayPicker(s.showDayPicker ?? false);
+        setIsTall(s.isTall ?? false);
         setSuggestions(s.suggestions ?? suggestions);
       } else {
         setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
@@ -67,13 +71,16 @@ export default function ChatWidget() {
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, busy, slots, showDayPicker]);
+  }, [messages, busy, slots, showDayPicker, showScheduler, isTall]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ messages, email, slots, date, page, showDayPicker, suggestions }));
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ messages, email, slots, date, page, showScheduler, showDayPicker, isTall, suggestions })
+      );
     } catch {}
-  }, [messages, email, slots, date, page, showDayPicker, suggestions]);
+  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, suggestions]);
 
   // ---- helpers ----
   function appendUser(text: string) {
@@ -97,15 +104,22 @@ export default function ChatWidget() {
 
   async function handleBrainResult(data: any) {
     if (data.type === "ask_day") {
-      setSlots(null);
-      setShowDayPicker(true);
+      // Only open the day picker if the user asked for scheduling (showScheduler = true).
       if (data.email) setEmail(data.email);
+      if (showScheduler) {
+        setShowDayPicker(true);
+      } else {
+        // If we’re not in scheduling mode, offer a tiny chip instead of opening UI.
+        setSuggestions([{ label: "Pick a day", value: "book a call" }]);
+      }
       appendBot(data.text || "Which day works for you?");
       return;
     }
 
     if (data.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null);
+      setShowScheduler(false);
+      setShowDayPicker(false);
       setSuggestions([{ label: "See available times", value: "book a call" }]);
       appendBot(data.text || "Here’s a secure checkout:");
       appendBot(`👉 ${data.url}`, { link: data.url });
@@ -115,6 +129,7 @@ export default function ChatWidget() {
     if (data.type === "slots" && Array.isArray(data.slots)) {
       if (data.email) setEmail(data.email);
       if (data.date) setDate(data.date);
+      setShowScheduler(true);
       setShowDayPicker(false);
       setSlots(data.slots);
       setSuggestions([]); // real options now
@@ -129,8 +144,9 @@ export default function ChatWidget() {
 
     if (data.type === "booked") {
       setSlots(null);
-      setSuggestions([]);
+      setShowScheduler(false);
       setShowDayPicker(false);
+      setSuggestions([]);
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
@@ -139,8 +155,9 @@ export default function ChatWidget() {
 
     if (data.type === "text" && data.text) {
       appendBot(data.text);
+      // If LLM suggested booking, it came as plain text; add a minimal chip
       setSuggestions([
-        { label: "See available times", value: "book a call" },
+        { label: "Show times", value: "book a call" },
         { label: "Pricing", value: "how much is it?" },
         { label: "Pay now", value: "pay" },
       ]);
@@ -155,6 +172,7 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
+  // ---- actions ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
@@ -208,11 +226,11 @@ export default function ChatWidget() {
     }
   }
 
-  async function backToDays() {
+  function resetSchedulingUI() {
     setSlots(null);
-    setShowDayPicker(true);
-    setSuggestions([]);
-    appendBot("No problem — choose another day:");
+    setShowDayPicker(false);
+    setShowScheduler(false);
+    setPage(0);
   }
 
   // ---- UI ----
@@ -241,15 +259,20 @@ export default function ChatWidget() {
       )}
 
       {open && (
-        <div className="fixed bottom-6 right-6 z-[1000] w-[360px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
+        <div className={`fixed bottom-6 right-6 z-[1000] ${isTall ? "h-[80vh]" : ""} w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden`}>
           {/* Header */}
           <div className="bg-white border-b px-4 py-3 flex items-center justify-between">
             <div className="font-semibold text-sm">Replicant Assistant</div>
-            <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setIsTall((v) => !v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">
+                {isTall ? "▭" : "▮▮"}
+              </button>
+              <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
+            </div>
           </div>
 
           {/* Messages */}
-          <div ref={wrapRef} className="h-80 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
+          <div ref={wrapRef} className={`${isTall ? "h-[calc(80vh-200px)]" : "h-[520px]"} overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]`}>
             {messages.map((m, i) => (
               <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"}`}>
@@ -265,55 +288,68 @@ export default function ChatWidget() {
               </div>
             ))}
 
-            {/* Day picker */}
-            {showDayPicker && (
-              <div className="mt-3 pt-2 border-t border-gray-200">
-                <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => chooseDay(new Date())}
-                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                    disabled={busy}
-                  >
-                    Today
-                  </button>
-                  <button
-                    onClick={() => chooseDay(new Date(Date.now()+86400000))}
-                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                    disabled={busy}
-                  >
-                    Tomorrow
-                  </button>
-                  {dayButtons}
+            {/* Collapsible scheduler */}
+            {showScheduler && (
+              <div className="mt-3 border border-gray-200 bg-white rounded-xl">
+                <div className="flex items-center justify-between px-3 py-2 border-b">
+                  <div className="text-xs font-medium">Scheduling</div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowScheduler(false)} className="text-xs underline">Hide</button>
+                    <button onClick={resetSchedulingUI} className="text-xs underline">Reset</button>
+                  </div>
                 </div>
-              </div>
-            )}
 
-            {/* Slot buttons */}
-            {slots && slots.length > 0 && (
-              <div className="mt-3 pt-2 border-t border-gray-200">
-                <div className="text-xs text-gray-600 mb-1">
-                  {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {slots.map((s) => (
-                    <button
-                      key={s.start}
-                      onClick={() => pickSlot(s)}
-                      className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                      disabled={busy}
-                      title={`${new Date(s.start).toLocaleString("en-US", { timeZone: "America/New_York" })}`}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                  <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
-                    More times →
-                  </button>
-                  <button onClick={backToDays} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
-                    ← Change day
-                  </button>
-                </div>
+                {/* Day picker */}
+                {showDayPicker && (
+                  <div className="px-3 py-2">
+                    <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => chooseDay(new Date())}
+                        className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                        disabled={busy}
+                      >
+                        Today
+                      </button>
+                      <button
+                        onClick={() => chooseDay(new Date(Date.now()+86400000))}
+                        className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                        disabled={busy}
+                      >
+                        Tomorrow
+                      </button>
+                      {dayButtons}
+                    </div>
+                  </div>
+                )}
+
+                {/* Slot buttons */}
+                {slots && slots.length > 0 && (
+                  <div className="px-3 py-2 border-t">
+                    <div className="text-xs text-gray-600 mb-1">
+                      {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {slots.map((s) => (
+                        <button
+                          key={s.start}
+                          onClick={() => pickSlot(s)}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                          title={`${new Date(s.start).toLocaleString("en-US", { timeZone: "America/New_York" })}`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                      <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                        More times →
+                      </button>
+                      <button onClick={() => setShowDayPicker(true)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                        ← Change day
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -330,6 +366,7 @@ export default function ChatWidget() {
                     onClick={async () => {
                       if (s.value.toLowerCase().includes("book")) {
                         setSuggestions([]);
+                        setShowScheduler(true);
                         setShowDayPicker(true);
                         appendUser(s.label);
                         appendBot("Which day works for you?");
@@ -358,7 +395,7 @@ export default function ChatWidget() {
                       appendUser(v);
                       (e.target as HTMLInputElement).value = "";
                       setInput("");
-                      void (async () => {
+                      (async () => {
                         const data = await callBrain({ provideEmail: { email: v } });
                         await handleBrainResult(data);
                       })();
