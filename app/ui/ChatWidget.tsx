@@ -7,6 +7,8 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
+const STORE_KEY = "replicant_chat_v1";
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -14,6 +16,7 @@ export default function ChatWidget() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [email, setEmail] = useState<string | undefined>();
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [filters, setFilters] = useState<{ dayOfWeek: number | null; page: number }>({ dayOfWeek: null, page: 0 });
   const [suggestions, setSuggestions] = useState([
     { label: "See available times", value: "book a call" },
     { label: "Pricing", value: "how much is it?" },
@@ -22,18 +25,41 @@ export default function ChatWidget() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
+  // ---- Persistence (localStorage) ----
   useEffect(() => {
-    if (open && messages.length === 0) {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        setMessages(saved.messages ?? []);
+        setEmail(saved.email ?? undefined);
+        setSlots(saved.slots ?? null);
+        setFilters(saved.filters ?? { dayOfWeek: null, page: 0 });
+        setSuggestions(saved.suggestions ?? suggestions);
+      } else {
+        setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
+      }
+    } catch {
       setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, []);
 
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy, slots]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ messages, email, slots, filters, suggestions })
+      );
+    } catch {}
+  }, [messages, email, slots, filters, suggestions]);
+
+  // ---- helpers ----
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
@@ -47,7 +73,7 @@ export default function ChatWidget() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, history: historyRef.current }),
+      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
     });
     return res.json();
   }
@@ -64,7 +90,7 @@ export default function ChatWidget() {
     if (data.type === "slots" && Array.isArray(data.slots)) {
       if (data.email) setEmail(data.email);
       setSlots(data.slots);
-      setSuggestions([]); // show real options instead of generic chips
+      setSuggestions([]); // real options now
       appendBot(data.text || "Pick a time:");
       return;
     }
@@ -76,7 +102,7 @@ export default function ChatWidget() {
 
     if (data.type === "booked") {
       setSlots(null);
-      setSuggestions([]); // clear suggestions after a confirmed booking
+      setSuggestions([]); // clear after confirmed booking
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
@@ -101,9 +127,14 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
+  // ---- actions ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
+
+    // if user asks a day, set a filter so the API returns that day's slots
+    const day = detectDayInText(val);
+    if (day !== null) setFilters((f) => ({ ...f, dayOfWeek: day, page: 0 }));
 
     appendUser(val);
     setInput("");
@@ -134,9 +165,32 @@ export default function ChatWidget() {
     const e = raw.trim();
     setEmail(e);
     const data = await callBrain({ provideEmail: { email: e } });
-    await handleBrainResult(data); // re-shows slots with the stored email
+    await handleBrainResult(data);
   }
 
+  function detectDayInText(text: string): number | null {
+    const m = text.toLowerCase();
+    const days = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+    for (let i = 0; i < days.length; i++) {
+      if (m.includes(days[i]) || m.includes(days[i].slice(0,3))) return i;
+    }
+    if (m.includes("today")) return new Date().getDay();
+    if (m.includes("tomorrow")) return (new Date().getDay() + 1) % 7;
+    return null;
+  }
+
+  async function showMoreTimes() {
+    setBusy(true);
+    try {
+      setFilters((f) => ({ ...f, page: (f.page ?? 0) + 1 }));
+      const data = await callBrain({ message: "more times" });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ---- UI ----
   return (
     <>
       {!open && (
@@ -177,7 +231,9 @@ export default function ChatWidget() {
             {/* Slot buttons */}
             {slots && slots.length > 0 && (
               <div className="mt-3 pt-2 border-t border-gray-200">
-                <div className="text-xs text-gray-600 mb-1">Quick picks:</div>
+                <div className="text-xs text-gray-600 mb-1">
+                  Quick picks{filters.dayOfWeek !== null ? ` for ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][filters.dayOfWeek]}` : ""}:
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {slots.map((s) => (
                     <button
@@ -190,6 +246,14 @@ export default function ChatWidget() {
                       {s.label}
                     </button>
                   ))}
+                  <button
+                    onClick={showMoreTimes}
+                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                    disabled={busy}
+                    title="Show more times"
+                  >
+                    More times →
+                  </button>
                 </div>
               </div>
             )}
@@ -207,8 +271,9 @@ export default function ChatWidget() {
                     onClick={async () => {
                       // UX: “See available times” should ALWAYS show slots immediately
                       if (s.value.toLowerCase().includes("book")) {
-                        appendUser(s.label);
+                        setSlots(null);
                         setSuggestions([]);
+                        appendUser(s.label);
                         setBusy(true);
                         try {
                           const data = await callBrain({ message: s.value });
@@ -247,7 +312,7 @@ export default function ChatWidget() {
                     }
                   }
                 }}
-                placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
+                placeholder={email ? "Type your message… (e.g., “Saturday morning” or “more times”)" : "Type your message… (or send your email)"}
                 className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50"
                 aria-label="Message input"
               />

@@ -29,14 +29,38 @@ function detectIntent(message: string) {
   if (/(pay|checkout|purchase|buy|subscribe|payment|pricing|price)/.test(m)) return "pay";
   if (/(book|schedule|call|meeting|demo|appointment|available times?|options?|when can|pick a time|time slots?)/.test(m)) return "book";
   if (/(email is|my email is|@)/.test(m)) return "email";
+  // day-of-week only (user asking for a specific day counts as book intent)
+  if (detectDayOfWeek(m) !== null || /(today|tomorrow)/.test(m)) return "book";
+  if (/more times|more options|show more/i.test(message)) return "book";
   return "unknown";
 }
 
-// Always returns options; falls back if rules exclude everything
-function nextSlots(targetCount = 5) {
+// Return weekday 0..6 (Sun..Sat), or null
+function detectDayOfWeek(text: string): number | null {
+  const m = text.toLowerCase();
+  const days = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+  for (let i = 0; i < days.length; i++) {
+    if (m.includes(days[i]) || m.includes(days[i].slice(0,3))) return i;
+  }
+  if (m.includes("today")) {
+    const n = new Date().toLocaleString("en-US",{ timeZone: BOOKING_TZ });
+    return new Date(n).getDay(); // 0..6 in TZ
+  }
+  if (m.includes("tomorrow")) {
+    const now = new Date();
+    const n = new Date(now.getTime() + 86400000).toLocaleString("en-US",{ timeZone: BOOKING_TZ });
+    return new Date(n).getDay();
+  }
+  return null;
+}
+
+// Generate slots; supports filters: dayOfWeek (0..6) and page (0,1,2...)
+function nextSlots(targetCount = 5, opts?: { dayOfWeek?: number | null; page?: number }) {
   const { days = [1,2,3,4,5], startHour = 10, endHour = 16, slotMinutes = 30, minLeadHours = 2 } = parseRules();
   const now = new Date();
   const minLeadMs = minLeadHours * 3600_000;
+  const page = Math.max(0, opts?.page ?? 0);
+  const wantDOW = typeof opts?.dayOfWeek === "number" ? opts!.dayOfWeek! : null;
 
   const toTZParts = (base: Date, addDays: number) => {
     const t = new Date(base.getTime() + addDays * 86400000);
@@ -49,13 +73,16 @@ function nextSlots(targetCount = 5) {
   const toTZISO = (y:number, m:number, d:number, h:number, min:number) =>
     new Date(Date.UTC(y, m - 1, d, h, min, 0)).toISOString();
 
-  const allowed = Array.isArray(days) && days.length ? days : [1,2,3,4,5];
-  const out: { start: string; end: string; label: string }[] = [];
+  const allowed = Array.isArray(days) && days.length ? days : [1,2,3,4,5]; // accept 0..6 or 1..7
 
-  for (let dayOffset = 0; dayOffset < 7 && out.length < targetCount; dayOffset++) {
+  const out: { start: string; end: string; label: string }[] = [];
+  const startOffset = page * 7; // each page = next 7 days
+  for (let dayOffset = startOffset; dayOffset < startOffset + 14 && out.length < targetCount; dayOffset++) {
     const { y, m, d, weekdayNum } = toTZParts(now, dayOffset);
     const oneBased = ((weekdayNum + 6) % 7) + 1; // Mon=1..Sun=7
-    if (!(allowed.includes(weekdayNum) || allowed.includes(oneBased))) continue;
+    const allowedByRules = allowed.includes(weekdayNum) || allowed.includes(oneBased);
+    const allowedByFilter = (wantDOW === null) || (weekdayNum === wantDOW);
+    if (!(allowedByRules && allowedByFilter)) continue;
 
     for (let H = startHour; H < endHour && out.length < targetCount; H++) {
       for (let M = 0; M < 60 && out.length < targetCount; M += slotMinutes) {
@@ -88,6 +115,7 @@ function nextSlots(targetCount = 5) {
       });
     }
   }
+
   return out.slice(0, targetCount);
 }
 
@@ -97,7 +125,7 @@ async function llmPlanReply(user: string, history: Msg[] | undefined) {
 
   const sys =
 `You are Replicant’s sales agent. Be concise (1–3 sentences), helpful, and confident.
-Answer normally, handle objections, and guide toward booking or payment.
+Answer questions normally, handle objections, and offer to book or pay when appropriate.
 Return STRICT JSON only:
 
 {
@@ -108,7 +136,7 @@ Return STRICT JSON only:
 Hard rules:
 - Do NOT claim anything is booked or “I sent a confirmation”.
 - If action is "book": do NOT state a specific time; invite them to pick a time below.
-- If action is "pay": mention that a secure checkout is available below.
+- If action is "pay": say a secure checkout is available below.
 - Never fabricate links.`;
 
   const messages = [
@@ -146,8 +174,6 @@ Hard rules:
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const history: Msg[] | undefined = body.history;
-  const message: string = body.message ?? "";
-  const intent = detectIntent(message);
 
   // 0) Slot picked → real booking
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
@@ -178,50 +204,58 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 1) Email provided → show slots
+  // 1) Email provided → show slots (keep last filters from client, if any)
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
-    const slots = nextSlots(5);
+    const slots = nextSlots(5, { dayOfWeek: body.filters?.dayOfWeek ?? null, page: body.filters?.page ?? 0 });
     return NextResponse.json({ type: "slots", text: "Perfect — pick a time that works:", email, slots });
   }
 
-  // 2) INTENT-FIRST short-circuit (fixes “no slots after clicking See times”)
+  // 2) Normal chat
+  const message: string = body.message ?? "";
+  const intent = detectIntent(message);
+  const dayFilter = detectDayOfWeek(message);
+  const page = typeof body.filters?.page === "number" ? body.filters.page : 0;
+
+  // INTENT-FIRST: pay/book/email → deterministic, no LLM uncertainty
   if (intent === "pay" && STRIPE_URL) {
     return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
   }
+
   if (intent === "book") {
     const email = extractEmail(message) || undefined;
-    const slots = nextSlots(5);
-    return NextResponse.json({
-      type: "slots",
-      text: email ? `Got it (${email}). Pick a time:` : "Pick a time that works:",
-      email,
-      slots
-    });
+    const slots = nextSlots(5, { dayOfWeek: dayFilter, page });
+    const note =
+      dayFilter === null ? "Pick a time that works:" :
+      `Here are times for ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dayFilter]}:`;
+    return NextResponse.json({ type: "slots", text: email ? `Got it (${email}). ${note}` : note, email, slots });
   }
+
   if (intent === "email") {
     const email = extractEmail(message);
     if (email) {
-      const slots = nextSlots(5);
-      return NextResponse.json({ type: "slots", text: `Great — I’ll use ${email}. Choose a time:`, email, slots });
+      const slots = nextSlots(5, { dayOfWeek: dayFilter, page });
+      const note =
+        dayFilter === null ? `Perfect — I’ll use ${email}. Choose a time:` :
+        `Perfect — I’ll use ${email}. Here are ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][dayFilter]} times:`;
+      return NextResponse.json({ type: "slots", text: note, email, slots });
     }
   }
 
-  // 3) LLM plan (for open-ended chat)
+  // LLM: handle open-ended Q&A; suggest next steps but don't force actions
   const planned = await llmPlanReply(message, history);
   if (!planned) {
-    const slots = nextSlots(5);
-    return NextResponse.json({ type: "slots", text: "I can help with questions or get something on the calendar. Here are some times:", slots });
+    return NextResponse.json({ type: "text", text: "Happy to help. Ask me anything, or say “book a call” when you’re ready." });
   }
   const { reply, action } = planned;
 
+  // We *offer* actions only if LLM suggests; otherwise just answer.
   if (action?.type === "pay" && STRIPE_URL) {
     return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: reply || "You can complete payment below." });
   }
   if (action?.type === "book") {
-    const email = extractEmail(message) || action?.email;
     const slots = nextSlots(5);
-    return NextResponse.json({ type: "slots", text: "Happy to lock a time — pick one below:", email, slots });
+    return NextResponse.json({ type: "slots", text: reply || "Happy to lock a time — pick one below:", slots });
   }
   if (action?.type === "email") {
     const email = extractEmail(message) || action?.email;
@@ -231,5 +265,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ type: "text", text: reply || "Happy to help — want to book a time or get started now?" });
+  return NextResponse.json({ type: "text", text: reply || "Got it — when you’re ready, I can show times or share checkout." });
 }
