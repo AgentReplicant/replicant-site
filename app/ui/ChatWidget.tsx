@@ -20,11 +20,8 @@ export default function ChatWidget() {
     { label: "Pay now", value: "pay" },
   ]);
   const wrapRef = useRef<HTMLDivElement>(null);
-
-  // Lightweight history for LLM (server truncates)
   const historyRef = useRef<Hist>([]);
 
-  // Welcome only (NO auto-send "hi")
   useEffect(() => {
     if (open && messages.length === 0) {
       setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
@@ -32,7 +29,6 @@ export default function ChatWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Auto-scroll
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -80,7 +76,7 @@ export default function ChatWidget() {
 
     if (data.type === "booked") {
       setSlots(null);
-      setSuggestions([]); // ⟵ clear suggestions after a confirmed booking
+      setSuggestions([]); // clear suggestions after a confirmed booking
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
@@ -208,7 +204,22 @@ export default function ChatWidget() {
                 {suggestions.map((s) => (
                   <button
                     key={s.value}
-                    onClick={() => handleSend(s.value)}
+                    onClick={async () => {
+                      // UX: “See available times” should ALWAYS show slots immediately
+                      if (s.value.toLowerCase().includes("book")) {
+                        appendUser(s.label);
+                        setSuggestions([]);
+                        setBusy(true);
+                        try {
+                          const data = await callBrain({ message: s.value });
+                          await handleBrainResult(data);
+                        } finally {
+                          setBusy(false);
+                        }
+                      } else {
+                        void handleSend(s.value);
+                      }
+                    }}
                     className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                     disabled={busy}
                   >

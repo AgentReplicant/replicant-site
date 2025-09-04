@@ -146,8 +146,10 @@ Hard rules:
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const history: Msg[] | undefined = body.history;
+  const message: string = body.message ?? "";
+  const intent = detectIntent(message);
 
-  // Slot picked → real booking
+  // 0) Slot picked → real booking
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
     const { start, end, email } = body.pickSlot;
     if (!email) {
@@ -176,69 +178,58 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Email provided → show slots
+  // 1) Email provided → show slots
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
     const slots = nextSlots(5);
     return NextResponse.json({ type: "slots", text: "Perfect — pick a time that works:", email, slots });
   }
 
-  // Regular chat
-  const message: string = body.message ?? "";
-  const intent = detectIntent(message);
-
-  // Try LLM plan first
-  const planned = await llmPlanReply(message, history);
-
-  if (!planned) {
-    // Deterministic fallbacks
-    if (intent === "pay" && STRIPE_URL) {
-      return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
-    }
-    if (intent === "book") {
-      const email = extractEmail(message) || undefined;
+  // 2) INTENT-FIRST short-circuit (fixes “no slots after clicking See times”)
+  if (intent === "pay" && STRIPE_URL) {
+    return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
+  }
+  if (intent === "book") {
+    const email = extractEmail(message) || undefined;
+    const slots = nextSlots(5);
+    return NextResponse.json({
+      type: "slots",
+      text: email ? `Got it (${email}). Pick a time:` : "Pick a time that works:",
+      email,
+      slots
+    });
+  }
+  if (intent === "email") {
+    const email = extractEmail(message);
+    if (email) {
       const slots = nextSlots(5);
-      return NextResponse.json({ type: "slots", text: email ? `Got it (${email}). Pick a time:` : "Pick a time that works:", email, slots });
+      return NextResponse.json({ type: "slots", text: `Great — I’ll use ${email}. Choose a time:`, email, slots });
     }
-    if (intent === "email") {
-      const email = extractEmail(message);
-      if (email) {
-        const slots = nextSlots(5);
-        return NextResponse.json({ type: "slots", text: `Great — I’ll use ${email}. Choose a time:`, email, slots });
-      }
-    }
+  }
+
+  // 3) LLM plan (for open-ended chat)
+  const planned = await llmPlanReply(message, history);
+  if (!planned) {
     const slots = nextSlots(5);
     return NextResponse.json({ type: "slots", text: "I can help with questions or get something on the calendar. Here are some times:", slots });
   }
-
   const { reply, action } = planned;
 
-  // Route actions with SAFE copy (no promises unless booked)
   if (action?.type === "pay" && STRIPE_URL) {
-    return NextResponse.json({
-      type: "action",
-      action: "open_url",
-      url: STRIPE_URL,
-      text: reply || "You can complete payment below."
-    });
+    return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: reply || "You can complete payment below." });
   }
-
   if (action?.type === "book") {
     const email = extractEmail(message) || action?.email;
     const slots = nextSlots(5);
-    const safe = "Happy to lock a time — pick one below:";
-    return NextResponse.json({ type: "slots", text: safe, email, slots });
+    return NextResponse.json({ type: "slots", text: "Happy to lock a time — pick one below:", email, slots });
   }
-
   if (action?.type === "email") {
     const email = extractEmail(message) || action?.email;
     if (email) {
       const slots = nextSlots(5);
-      const safe = `Perfect — I’ll use ${email}. Choose a time:`;
-      return NextResponse.json({ type: "slots", text: safe, email, slots });
+      return NextResponse.json({ type: "slots", text: `Perfect — I’ll use ${email}. Choose a time:`, email, slots });
     }
   }
 
-  // No action — just reply like a human
   return NextResponse.json({ type: "text", text: reply || "Happy to help — want to book a time or get started now?" });
 }
