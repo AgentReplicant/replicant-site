@@ -7,7 +7,22 @@ type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Slot = { start: string; end: string; label: string };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v1";
+const STORE_KEY = "replicant_chat_v2";
+
+type DateFilter = { y: number; m: number; d: number } | null;
+
+function nextNDays(n=14) {
+  const out: Date[] = [];
+  const now = new Date();
+  for (let i=0;i<n;i++) out.push(new Date(now.getTime()+i*86400000));
+  return out;
+}
+function ymd(d: Date): {y:number,m:number,d:number} {
+  return { y: d.getFullYear(), m: d.getMonth()+1, d: d.getDate() };
+}
+function dayLabel(d: Date) {
+  return d.toLocaleDateString("en-US",{ weekday:"short", month:"short", day:"numeric" });
+}
 
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
@@ -16,7 +31,9 @@ export default function ChatWidget() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [email, setEmail] = useState<string | undefined>();
   const [slots, setSlots] = useState<Slot[] | null>(null);
-  const [filters, setFilters] = useState<{ dayOfWeek: number | null; page: number }>({ dayOfWeek: null, page: 0 });
+  const [date, setDate] = useState<DateFilter>(null);
+  const [page, setPage] = useState(0);
+  const [showDayPicker, setShowDayPicker] = useState(false);
   const [suggestions, setSuggestions] = useState([
     { label: "See available times", value: "book a call" },
     { label: "Pricing", value: "how much is it?" },
@@ -25,17 +42,19 @@ export default function ChatWidget() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // ---- Persistence (localStorage) ----
+  // ---- Persistence ----
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
-        const saved = JSON.parse(raw);
-        setMessages(saved.messages ?? []);
-        setEmail(saved.email ?? undefined);
-        setSlots(saved.slots ?? null);
-        setFilters(saved.filters ?? { dayOfWeek: null, page: 0 });
-        setSuggestions(saved.suggestions ?? suggestions);
+        const s = JSON.parse(raw);
+        setMessages(s.messages ?? []);
+        setEmail(s.email ?? undefined);
+        setSlots(s.slots ?? null);
+        setDate(s.date ?? null);
+        setPage(s.page ?? 0);
+        setShowDayPicker(s.showDayPicker ?? false);
+        setSuggestions(s.suggestions ?? suggestions);
       } else {
         setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
       }
@@ -48,16 +67,13 @@ export default function ChatWidget() {
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, busy, slots]);
+  }, [messages, busy, slots, showDayPicker]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        STORE_KEY,
-        JSON.stringify({ messages, email, slots, filters, suggestions })
-      );
+      localStorage.setItem(STORE_KEY, JSON.stringify({ messages, email, slots, date, page, showDayPicker, suggestions }));
     } catch {}
-  }, [messages, email, slots, filters, suggestions]);
+  }, [messages, email, slots, date, page, showDayPicker, suggestions]);
 
   // ---- helpers ----
   function appendUser(text: string) {
@@ -70,6 +86,7 @@ export default function ChatWidget() {
   }
 
   async function callBrain(payload: any) {
+    const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -79,6 +96,14 @@ export default function ChatWidget() {
   }
 
   async function handleBrainResult(data: any) {
+    if (data.type === "ask_day") {
+      setSlots(null);
+      setShowDayPicker(true);
+      if (data.email) setEmail(data.email);
+      appendBot(data.text || "Which day works for you?");
+      return;
+    }
+
     if (data.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null);
       setSuggestions([{ label: "See available times", value: "book a call" }]);
@@ -89,6 +114,8 @@ export default function ChatWidget() {
 
     if (data.type === "slots" && Array.isArray(data.slots)) {
       if (data.email) setEmail(data.email);
+      if (data.date) setDate(data.date);
+      setShowDayPicker(false);
       setSlots(data.slots);
       setSuggestions([]); // real options now
       appendBot(data.text || "Pick a time:");
@@ -102,7 +129,8 @@ export default function ChatWidget() {
 
     if (data.type === "booked") {
       setSlots(null);
-      setSuggestions([]); // clear after confirmed booking
+      setSuggestions([]);
+      setShowDayPicker(false);
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
@@ -127,14 +155,9 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // ---- actions ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
-
-    // if user asks a day, set a filter so the API returns that day's slots
-    const day = detectDayInText(val);
-    if (day !== null) setFilters((f) => ({ ...f, dayOfWeek: day, page: 0 }));
 
     appendUser(val);
     setInput("");
@@ -161,36 +184,50 @@ export default function ChatWidget() {
     }
   }
 
-  async function submitEmail(raw: string) {
-    const e = raw.trim();
-    setEmail(e);
-    const data = await callBrain({ provideEmail: { email: e } });
-    await handleBrainResult(data);
-  }
-
-  function detectDayInText(text: string): number | null {
-    const m = text.toLowerCase();
-    const days = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-    for (let i = 0; i < days.length; i++) {
-      if (m.includes(days[i]) || m.includes(days[i].slice(0,3))) return i;
-    }
-    if (m.includes("today")) return new Date().getDay();
-    if (m.includes("tomorrow")) return (new Date().getDay() + 1) % 7;
-    return null;
-  }
-
-  async function showMoreTimes() {
+  async function chooseDay(d: Date) {
+    const { y, m, d: dd } = ymd(d);
+    setDate({ y, m, d: dd });
+    setPage(0);
     setBusy(true);
     try {
-      setFilters((f) => ({ ...f, page: (f.page ?? 0) + 1 }));
-      const data = await callBrain({ message: "more times" });
+      const data = await callBrain({ message: "book a call" });
       await handleBrainResult(data);
     } finally {
       setBusy(false);
     }
   }
 
+  async function showMoreTimes() {
+    setPage((p) => p + 1);
+    setBusy(true);
+    try {
+      const data = await callBrain({ message: "book a call" });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function backToDays() {
+    setSlots(null);
+    setShowDayPicker(true);
+    setSuggestions([]);
+    appendBot("No problem — choose another day:");
+  }
+
   // ---- UI ----
+  const dayButtons = nextNDays(14).map((d) => (
+    <button
+      key={d.toDateString()}
+      onClick={() => chooseDay(d)}
+      className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${date && d.toDateString() === new Date(date.y, date.m-1, date.d).toDateString() ? "bg-black text-white" : ""}`}
+      disabled={busy}
+      title={d.toLocaleDateString()}
+    >
+      {dayLabel(d)}
+    </button>
+  ));
+
   return (
     <>
       {!open && (
@@ -228,11 +265,35 @@ export default function ChatWidget() {
               </div>
             ))}
 
+            {/* Day picker */}
+            {showDayPicker && (
+              <div className="mt-3 pt-2 border-t border-gray-200">
+                <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => chooseDay(new Date())}
+                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                    disabled={busy}
+                  >
+                    Today
+                  </button>
+                  <button
+                    onClick={() => chooseDay(new Date(Date.now()+86400000))}
+                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                    disabled={busy}
+                  >
+                    Tomorrow
+                  </button>
+                  {dayButtons}
+                </div>
+              </div>
+            )}
+
             {/* Slot buttons */}
             {slots && slots.length > 0 && (
               <div className="mt-3 pt-2 border-t border-gray-200">
                 <div className="text-xs text-gray-600 mb-1">
-                  Quick picks{filters.dayOfWeek !== null ? ` for ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][filters.dayOfWeek]}` : ""}:
+                  {date ? `Times for ${new Date(date.y, date.m-1, date.d).toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}` : "Quick picks"}:
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {slots.map((s) => (
@@ -246,13 +307,11 @@ export default function ChatWidget() {
                       {s.label}
                     </button>
                   ))}
-                  <button
-                    onClick={showMoreTimes}
-                    className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                    disabled={busy}
-                    title="Show more times"
-                  >
+                  <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
                     More times →
+                  </button>
+                  <button onClick={backToDays} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                    ← Change day
                   </button>
                 </div>
               </div>
@@ -269,18 +328,11 @@ export default function ChatWidget() {
                   <button
                     key={s.value}
                     onClick={async () => {
-                      // UX: “See available times” should ALWAYS show slots immediately
                       if (s.value.toLowerCase().includes("book")) {
-                        setSlots(null);
                         setSuggestions([]);
+                        setShowDayPicker(true);
                         appendUser(s.label);
-                        setBusy(true);
-                        try {
-                          const data = await callBrain({ message: s.value });
-                          await handleBrainResult(data);
-                        } finally {
-                          setBusy(false);
-                        }
+                        appendBot("Which day works for you?");
                       } else {
                         void handleSend(s.value);
                       }
@@ -306,13 +358,16 @@ export default function ChatWidget() {
                       appendUser(v);
                       (e.target as HTMLInputElement).value = "";
                       setInput("");
-                      void submitEmail(v);
+                      void (async () => {
+                        const data = await callBrain({ provideEmail: { email: v } });
+                        await handleBrainResult(data);
+                      })();
                     } else {
                       void handleSend(v);
                     }
                   }
                 }}
-                placeholder={email ? "Type your message… (e.g., “Saturday morning” or “more times”)" : "Type your message… (or send your email)"}
+                placeholder={email ? "Type your message…" : "Type your message… (or send your email)"}
                 className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50"
                 aria-label="Message input"
               />
