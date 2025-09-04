@@ -59,17 +59,13 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
   ]);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Auto-welcome when opened
+  // Auto-welcome when opened and ask brain immediately
   useEffect(() => {
     if (open && messages.length === 0 && persona) {
       setMessages([
-        {
-          from: "bot",
-          text: `Hi, I’m ${persona.label} — Replicant’s ${persona.role}. Want me to book you in or get you set up now?`,
-        },
+        { from: "bot", text: `Hi, I’m ${persona.label} — Replicant’s ${persona.role}. Want me to book you in or get you set up now?` },
       ]);
-      // Ask the brain for default options (so users see slots without magic words)
-      void handleSend("hi");
+      void handleSend("hi"); // triggers default slots/pay options
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, persona]);
@@ -84,7 +80,7 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, personaId: persona?.id, history: [] }),
     });
     return res.json();
   }
@@ -95,16 +91,17 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
       setSuggestions([{ label: "See available times", value: "book a call" }]);
       setMessages((m) => [
         ...m,
-        { from: "bot", text: data.text || "Opening payment…" },
+        { from: "bot", text: data.text || "Opening checkout…" },
         { from: "bot", text: `👉 Pay here: ${data.url}`, meta: { link: data.url } },
       ]);
       return;
     }
 
     if (data.type === "slots" && Array.isArray(data.slots)) {
+      console.log("Chat slots returned:", data.slots?.length, data.slots);
       if (data.email) setEmail(data.email);
       setSlots(data.slots);
-      setSuggestions([]); // we have real options now
+      setSuggestions([]); // show real options
       setMessages((m) => [...m, { from: "bot", text: data.text || "Pick a time:" }]);
       return;
     }
@@ -161,8 +158,7 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
   async function pickSlot(slot: Slot) {
     if (!email) {
       setMessages((m) => [...m, { from: "bot", text: "Great — what’s the best email for the invite?" }]);
-      // keep chosen slot visible; email will trigger re-show
-      return;
+      return; // when email arrives we’ll re-show slots automatically
     }
     setBusy(true);
     try {
@@ -177,7 +173,7 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
     const e = raw.trim();
     setEmail(e);
     const data = await callBrain({ provideEmail: { email: e } });
-    await handleBrainResult(data);
+    await handleBrainResult(data); // re-shows slots
   }
 
   return (
@@ -212,14 +208,10 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
               title="Choose persona"
             >
               {PERSONAS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
+                <option key={p.id} value={p.id}>{p.label}</option>
               ))}
             </select>
-            <button onClick={() => setOpen(false)} className="ml-2 text-xs text-gray-500 hover:text-black" aria-label="Close chat">
-              ✕
-            </button>
+            <button onClick={() => setOpen(false)} className="ml-2 text-xs text-gray-500 hover:text-black" aria-label="Close chat">✕</button>
           </div>
 
           {/* Messages */}
@@ -227,11 +219,10 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
             {messages.map((m, i) => (
               <ChatBubble key={i} from={m.from} text={m.text} meta={m.meta} />
             ))}
-            {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
 
             {/* Slot buttons */}
             {slots && slots.length > 0 && (
-              <div className="mt-2">
+              <div className="mt-3 pt-2 border-t border-gray-200">
                 <div className="text-xs text-gray-600 mb-1">Quick picks:</div>
                 <div className="flex flex-wrap gap-2">
                   {slots.map((s) => (
@@ -248,6 +239,8 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
                 </div>
               </div>
             )}
+
+            {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
           </div>
 
           {/* Input + quick actions */}
@@ -266,6 +259,7 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
                 ))}
               </div>
             )}
+
             <div className="flex gap-2">
               <input
                 value={input}
@@ -292,7 +286,10 @@ export default function ChatWidget({ defaultPersonaId = "alex" }: { defaultPerso
                 Send
               </button>
             </div>
-            <div className="text-[10px] text-gray-500 mt-2">By continuing, you agree to our TOS. Conversations may be logged to improve service.</div>
+
+            <div className="text-[10px] text-gray-500 mt-2">
+              By continuing, you agree to our TOS. Conversations may be logged to improve service.
+            </div>
           </div>
         </div>
       )}
