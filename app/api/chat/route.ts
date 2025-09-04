@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 type Role = "user" | "assistant" | "system";
 type Msg = { role: Role; content: string };
 
-// ====== CONFIG / ENVs ======
+// ====== CONFIG ======
 const STRIPE_URL = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK || "";
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
 const BOOKING_RULES_JSON =
@@ -20,21 +20,22 @@ function parseRules() {
   try { return JSON.parse(BOOKING_RULES_JSON); }
   catch { return { days:[1,2,3,4,5], startHour:10, endHour:16, slotMinutes:30, minLeadHours:2 }; }
 }
+
 function extractEmail(text: string): string | null {
   const m = (text || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return m ? m[0] : null;
 }
+
+// IMPORTANT: do NOT treat generic “appointment(s)” as booking intent.
+// Only explicit “book / schedule / call / meeting / demo / time / slot”
 function detectIntent(message: string) {
   const m = (message || "").toLowerCase();
   if (/(pay|checkout|purchase|buy|subscribe|payment|pricing|price)/.test(m)) return "pay";
-  if (/(book|schedule|call|meeting|demo|appointment|available times?|options?|when can|pick a time|time slots?)/.test(m)) return "book";
+  if (/(book|schedule|call|meeting|demo|pick a time|time slots?|see (available )?times?)/.test(m)) return "book";
   if (/(email is|my email is|@)/.test(m)) return "email";
   return "unknown";
 }
 
-function toTZ(date: Date) {
-  return new Date(date.toLocaleString("en-US", { timeZone: BOOKING_TZ }));
-}
 function isoAt(y:number,m:number,d:number,h:number,min:number) {
   return new Date(Date.UTC(y, m-1, d, h, min, 0)).toISOString();
 }
@@ -43,6 +44,7 @@ function fmtLabel(iso: string) {
     timeZone: BOOKING_TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
   });
 }
+
 function slotsForDate(y:number,m:number,d:number, page=0) {
   const { startHour=10, endHour=16, slotMinutes=30, minLeadHours=2 } = parseRules();
   const now = new Date();
@@ -52,8 +54,8 @@ function slotsForDate(y:number,m:number,d:number, page=0) {
   for (let H=startHour; H<endHour; H++) {
     for (let M=0; M<60; M+=slotMinutes) {
       const s = isoAt(y,m,d,H,M);
-      const e = isoAt(y,m,d,H,M+slotMinutes);
       if (new Date(s).getTime() - now.getTime() < minLeadMs) continue;
+      const e = isoAt(y,m,d,H,M+slotMinutes);
       all.push({ start:s, end:e, label: fmtLabel(s) });
     }
   }
@@ -61,28 +63,29 @@ function slotsForDate(y:number,m:number,d:number, page=0) {
   const startIdx = page*pageSize;
   return { slots: all.slice(startIdx, startIdx+pageSize), total: all.length };
 }
+
 function nextWorkingDayWithSlots(y:number,m:number,d:number, max=14) {
   const rules = parseRules();
-  const allowed = rules.days?.length ? rules.days : [1,2,3,4,5];
-  const base = toTZ(new Date(Date.UTC(y, m-1, d, 12, 0, 0)));
+  const allowed = rules.days?.length ? rules.days : [1,2,3,4,5]; // accept 1..7 or 0..6
+  const base = new Date(Date.UTC(y, m-1, d, 12, 0, 0));
   for (let i=0;i<=max;i++){
     const cand = new Date(base.getTime()+i*86400000);
-    const oneBased = ((cand.getDay()+6)%7)+1;
-    if (!(allowed.includes(cand.getDay()) || allowed.includes(oneBased))) continue;
-    const { slots } = slotsForDate(cand.getFullYear(), cand.getMonth()+1, cand.getDate(), 0);
-    if (slots.length) return { y:cand.getFullYear(), m:cand.getMonth()+1, d:cand.getDate() };
+    const oneBased = ((cand.getUTCDay()+6)%7)+1;
+    // treat both representations as allowed
+    if (!(allowed.includes(cand.getUTCDay()) || allowed.includes(oneBased))) continue;
+    const { slots } = slotsForDate(cand.getUTCFullYear(), cand.getUTCMonth()+1, cand.getUTCDate(), 0);
+    if (slots.length) return { y:cand.getUTCFullYear(), m:cand.getUTCMonth()+1, d:cand.getUTCDate() };
   }
   return null;
 }
 
-// LLM: answer naturally; never promise bookings; never auto-open scheduler
+// LLM: answer naturally; suggest next steps; never promise bookings.
 async function llmPlanReply(user: string, history: Msg[] | undefined) {
   if (!LLM_ENABLED) return null;
 
   const sys = `You are Replicant’s sales agent. Be concise (1–3 sentences), helpful, and confident.
-Answer questions first. If the user seems ready, you MAY suggest next steps (book/pay),
-but DO NOT assume they want to schedule. Do NOT claim anything is booked.
-Return STRICT JSON only:
+Answer questions first. If appropriate, OFFER next steps (book/pay), but do not assume.
+Never claim anything is booked. Return STRICT JSON:
 {"reply":"<text>","action":{"type":"none|pay|book|email","email":"<optional>"}}`;
 
   const messages = [
@@ -113,7 +116,7 @@ export async function POST(req: NextRequest) {
   const date = filters.date as { y:number, m:number, d:number } | undefined;
   const page = typeof filters.page === "number" ? filters.page : 0;
 
-  // Picked a slot → book
+  // Picked slot → book
   if ("pickSlot" in body && body.pickSlot?.start && body.pickSlot?.end) {
     const { start, end, email } = body.pickSlot;
     if (!email) return NextResponse.json({ type: "need_email", text: "What’s the best email for the calendar invite?" });
@@ -133,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Provided email → if a date exists, show that day; else ask for day (client decides when to open UI)
+  // Provided email
   if ("provideEmail" in body && body.provideEmail?.email) {
     const email = body.provideEmail.email;
     if (date) {
@@ -147,7 +150,8 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ type: "slots", text: "Great — pick a time that works:", email, slots, date, total });
     }
-    return NextResponse.json({ type: "ask_day", text: "Got it — which day works for you?" });
+    // don’t spam “which day works” here; the client will show a small chip
+    return NextResponse.json({ type: "text", text: "Thanks! When you’re ready, I can show available days to book." , email });
   }
 
   // Normal chat
@@ -159,9 +163,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: "You can complete payment below." });
   }
 
-  // Deterministic: booking (only when the user asked)
+  // Deterministic: booking only when explicitly asked
   if (intent === "book") {
-    // if we already have a date from the client, show times; else ask for day
     if (date) {
       const { slots, total } = slotsForDate(date.y, date.m, date.d, page);
       if (!slots.length) {
@@ -176,7 +179,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ type: "ask_day", text: "Which day works for you?" });
   }
 
-  // LLM: answer questions; if it suggests booking, we’ll just tell the client to show a small chip
+  // LLM: answer normally; may *suggest* next steps
   const planned = await llmPlanReply(message, history);
   if (!planned) {
     return NextResponse.json({ type: "text", text: "Happy to help. Ask me anything; when you’re ready, I can show available days and times." });
@@ -188,12 +191,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ type: "action", action: "open_url", url: STRIPE_URL, text: reply || "You can complete payment below." });
   }
   if (action?.type === "book") {
-    // do NOT open the scheduler automatically; the widget will show a tiny chip
+    // Do NOT open scheduler here; client will just show a subtle chip.
     return NextResponse.json({ type: "text", text: reply || "If you’d like, I can show available times." });
   }
   if (action?.type === "email") {
     const email = extractEmail(message) || action?.email;
-    if (email) return NextResponse.json({ type: "ask_day", text: `Thanks — I’ll use ${email}. Which day works for you?`, email });
+    if (email) return NextResponse.json({ type: "text", text: `Thanks — I’ll use ${email}. Say “show times” when you want to book.`, email });
   }
 
   return NextResponse.json({ type: "text", text: reply || "Got it — when you’re ready, I can show available times." });
