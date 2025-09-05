@@ -1,223 +1,176 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/schedule/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+import { NextRequest, NextResponse } from "next/server";
+import { google } from "googleapis";
 
-type AirtableRecord = { id: string; fields: Record<string, any> };
+/**
+ * Required env:
+ *   GOOGLE_CLIENT_ID
+ *   GOOGLE_CLIENT_SECRET
+ *   GOOGLE_REDIRECT_URI
+ *   GOOGLE_CALENDAR_ID (or omit -> "primary")
+ *   BOOKING_TZ (e.g., "America/New_York")
+ *
+ * Optional (preferred):
+ *   GOOGLE_REFRESH_TOKEN
+ *
+ * Optional Airtable fallback if you store the token there:
+ *   AIRTABLE_TOKEN, AIRTABLE_BASE_ID
+ *   AIRTABLE_GOOGLE_TOKEN_TABLE (default "OAuth")
+ *   AIRTABLE_GOOGLE_PROVIDER_FIELD (default "provider")
+ *   AIRTABLE_GOOGLE_REFRESH_FIELD (default "refresh_token")
+ */
 
-const AT_BASE = process.env.AIRTABLE_BASE_ID!;
-const AT_TOKEN = process.env.AIRTABLE_TOKEN!;
-const AT_HEADERS_JSON = {
-  Authorization: `Bearer ${AT_TOKEN}`,
-  'Content-Type': 'application/json',
-};
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
+const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
+const DIRECT_REFRESH = process.env.GOOGLE_REFRESH_TOKEN || "";
 
-async function getRefreshTokenFromAirtable() {
-  const res = await fetch(
-    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(
-      `{Name}="Google OAuth"`
-    )}`,
-    { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
+const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN || "";
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "";
+const AIRTABLE_GOOGLE_TOKEN_TABLE =
+  process.env.AIRTABLE_GOOGLE_TOKEN_TABLE || "OAuth";
+const AIRTABLE_GOOGLE_PROVIDER_FIELD =
+  process.env.AIRTABLE_GOOGLE_PROVIDER_FIELD || "provider";
+const AIRTABLE_GOOGLE_REFRESH_FIELD =
+  process.env.AIRTABLE_GOOGLE_REFRESH_FIELD || "refresh_token";
+
+function isIsoUtcZ(s: unknown) {
+  return (
+    typeof s === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(s)
   );
-  const json = await res.json();
-  const rec: AirtableRecord | undefined = json.records?.[0];
-  if (!rec) return null;
-  try {
-    const msg = rec.fields.Message as string | undefined;
-    if (!msg) return null;
-    const parsed = JSON.parse(msg);
-    return parsed.refresh_token as string | null;
-  } catch {
-    return null;
-  }
 }
 
-async function refreshAccessToken(refreshToken: string) {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    }),
-  });
-  if (!res.ok) throw new Error(`Failed to refresh access token: ${await res.text()}`);
-  return (await res.json()) as { access_token: string; expires_in: number };
+/** Convert an ISO (UTC, with Z) to a timezone-local RFC3339 WITHOUT offset/“Z”.
+ *  Example: "2025-09-05T21:30:00.000Z" + America/New_York -> "2025-09-05T17:30:00"
+ */
+function toLocalDateTimeString(isoUtcZ: string, timeZone: string) {
+  const d = new Date(isoUtcZ);
+  // en-CA gives YYYY-MM-DD, 24h; we replace space with T
+  const s = d.toLocaleString("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }); // -> "YYYY-MM-DD HH:MM:SS"
+  return s.replace(" ", "T"); // RFC3339 local, no offset
 }
 
-async function createCalendarEvent(
-  accessToken: string,
-  payload: {
-    summary?: string;
-    description?: string;
-    start: string; // ISO
-    end: string; // ISO
-    attendeeEmail?: string;
-  }
-) {
-  const tz = process.env.BOOKING_TZ || 'America/New_York';
-  const calId = process.env.GOOGLE_CALENDAR_ID!;
-  const requestId = 'req-' + Math.random().toString(36).slice(2);
+async function getRefreshToken(): Promise<string> {
+  if (DIRECT_REFRESH) return DIRECT_REFRESH;
 
-  const body = {
-    summary: payload.summary || 'Replicant Consultation',
-    description: payload.description || 'Booked via Replicant',
-    start: { dateTime: payload.start, timeZone: tz },
-    end: { dateTime: payload.end, timeZone: tz },
-    attendees: payload.attendeeEmail ? [{ email: payload.attendeeEmail }] : [],
-    conferenceData: {
-      createRequest: { requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } },
-    },
-  };
-
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-      calId
-    )}/events?conferenceDataVersion=1`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
+  if (AIRTABLE_TOKEN && AIRTABLE_BASE_ID) {
+    try {
+      const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(
+        AIRTABLE_GOOGLE_TOKEN_TABLE
+      )}?filterByFormula=${encodeURIComponent(
+        `{${AIRTABLE_GOOGLE_PROVIDER_FIELD}}="google"`
+      )}&maxRecords=1`;
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` },
+        cache: "no-store",
+      });
+      const j = await r.json();
+      const rec = j?.records?.[0];
+      const token =
+        rec?.fields?.[AIRTABLE_GOOGLE_REFRESH_FIELD] ||
+        rec?.fields?.refresh_token;
+      if (token && typeof token === "string") return token;
+    } catch {
+      // fall through
     }
+  }
+
+  throw new Error(
+    "Missing Google refresh token. Set GOOGLE_REFRESH_TOKEN or configure Airtable lookup."
   );
-
-  if (!res.ok) throw new Error(`Create event failed: ${await res.text()}`);
-  return res.json();
 }
 
-async function upsertAirtableAppointment(email: string | undefined, startISO: string) {
-  if (!email) return;
-
-  // IMPORTANT: double quotes in the filterByFormula
-  const list = await fetch(
-    `https://api.airtable.com/v0/${AT_BASE}/Leads?maxRecords=1&filterByFormula=${encodeURIComponent(
-      `{Email}="${email}"`
-    )}`,
-    { headers: { Authorization: `Bearer ${AT_TOKEN}` }, cache: 'no-store' }
-  ).then((r) => r.json());
-
-  const fields = {
-    Email: email,
-    'Appointment Time': startISO,
-    Status: 'Booked',
-  };
-
-  if (list.records?.[0]) {
-    const rec: AirtableRecord = list.records[0];
-    const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/Leads/${rec.id}`, {
-      method: 'PATCH',
-      headers: AT_HEADERS_JSON,
-      body: JSON.stringify({ fields, typecast: true }), // typecast to allow "Booked"
-    });
-    if (!res.ok) {
-      throw new Error(`Airtable PATCH failed: ${await res.text()}`);
-    }
-  } else {
-    // If no existing lead for that email, create one
-    const res = await fetch(`https://api.airtable.com/v0/${AT_BASE}/Leads`, {
-      method: 'POST',
-      headers: AT_HEADERS_JSON,
-      body: JSON.stringify({
-        records: [{ fields: { Name: email.split('@')[0], ...fields } }],
-        typecast: true,
-      }),
-    });
-    if (!res.ok) {
-      throw new Error(`Airtable CREATE failed: ${await res.text()}`);
-    }
-  }
-}
-
-// --- Optional email helper (auto-skips if no SENDGRID_API_KEY) ---
-async function maybeSendEmail(opts: { to?: string | null; subject: string; text: string }) {
-  const key = process.env.SENDGRID_API_KEY;
-  if (!key || !opts.to) return;
-  try {
-    await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: opts.to }] }],
-        from: { email: 'agentreplicant@gmail.com', name: 'Replicant' },
-        subject: opts.subject,
-        content: [{ type: 'text/plain', value: opts.text }],
-      }),
-    });
-  } catch (e) {
-    console.warn('SendGrid notify skipped/error:', e);
-  }
+function oauthClient(refreshToken: string) {
+  const client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+  client.setCredentials({ refresh_token: refreshToken });
+  return client;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const { start, end, email, summary, description } = body;
+    const body = (await req.json().catch(() => ({}))) as {
+      start?: string; // ISO with Z from chat
+      end?: string;   // ISO with Z from chat
+      email?: string;
+      summary?: string;
+      description?: string;
+    };
 
-    if (!start || !end) {
-      return NextResponse.json({ ok: false, error: 'start and end (ISO) required' }, { status: 400 });
-    }
-
-    const refreshToken = await getRefreshTokenFromAirtable();
-    if (!refreshToken) {
+    if (!isIsoUtcZ(body.start) || !isIsoUtcZ(body.end)) {
       return NextResponse.json(
-        { ok: false, error: 'Google not connected. Visit /api/google/oauth/start first.' },
+        { error: "Invalid start/end (must be ISO UTC with Z, e.g. 2025-09-05T21:30:00.000Z)" },
         { status: 400 }
       );
     }
 
-    const { access_token } = await refreshAccessToken(refreshToken);
-    const event = await createCalendarEvent(access_token, {
-      start,
-      end,
-      attendeeEmail: email,
-      summary,
-      description,
+    // Convert to timezone-local wall time (no Z) when we also send timeZone.
+    const startLocal = toLocalDateTimeString(body.start!, BOOKING_TZ);
+    const endLocal   = toLocalDateTimeString(body.end!, BOOKING_TZ);
+
+    const refreshToken = await getRefreshToken();
+    const auth = oauthClient(refreshToken);
+    const calendar = google.calendar({ version: "v3", auth });
+
+    const event = {
+      summary: body.summary || "Replicant — Intro Call",
+      description:
+        body.description ||
+        "Auto-booked from website chat. Times shown and scheduled in Eastern Time.",
+      start: { dateTime: startLocal, timeZone: BOOKING_TZ },
+      end:   { dateTime: endLocal,   timeZone: BOOKING_TZ },
+      attendees: body.email ? [{ email: body.email }] : [],
+      conferenceData: {
+        createRequest: {
+          requestId: `replicant-${Date.now()}`,
+          conferenceSolutionKey: { type: "hangoutsMeet" },
+        },
+      },
+    } as const;
+
+    const res = await calendar.events.insert({
+      calendarId: CALENDAR_ID,
+      requestBody: event,
+      sendUpdates: "all",
+      conferenceDataVersion: 1,
     });
 
-    // Upsert into Airtable
-    await upsertAirtableAppointment(email, start);
-
-    // --- Optional emails (admin + customer) ---
-    const tz = process.env.BOOKING_TZ || 'America/New_York';
-    const when = new Date(start).toLocaleString(tz, { timeZone: tz });
+    const ev = res.data;
     const meetLink =
-      event.hangoutLink || event.conferenceData?.entryPoints?.[0]?.uri || null;
+      ev?.hangoutLink ||
+      ev?.conferenceData?.entryPoints?.find(
+        (p: any) => p?.entryPointType === "video"
+      )?.uri ||
+      null;
 
-    await maybeSendEmail({
-      to: process.env.ADMIN_NOTIFY_EMAIL,
-      subject: 'Replicant — New booking',
-      text: `Email: ${email || '(no email)'}\nWhen: ${when}\nMeet: ${meetLink || '(pending)'}\nEvent: ${event.htmlLink}`,
-    });
-    if (email) {
-      await maybeSendEmail({
-        to: email,
-        subject: 'Your Replicant consultation is booked',
-        text: `Thanks! You’re booked for ${when}.\nGoogle Meet: ${meetLink}\nEvent: ${event.htmlLink}`,
-      });
-    }
-    // -----------------------------------------
-
-    return NextResponse.json({
-      ok: true,
-      eventId: event.id,
-      meetLink,
-      htmlLink: event.htmlLink,
-    });
-  } catch (e: any) {
-    console.error('schedule error:', e?.message || e);
-    return NextResponse.json({ ok: false, error: e?.message || 'Server error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: true, eventId: ev?.id, htmlLink: ev?.htmlLink, meetLink },
+      { status: 200 }
+    );
+  } catch (err: any) {
+    const g = err?.response?.data;
+    const message =
+      g?.error?.message ||
+      g?.error_description ||
+      err?.message ||
+      "Unknown scheduling error";
+    return NextResponse.json(
+      { error: message, google: g || null },
+      { status: 500 }
+    );
   }
-}
-
-// quick health check
-export async function GET() {
-  return NextResponse.json({ ok: true, connected: true });
 }
