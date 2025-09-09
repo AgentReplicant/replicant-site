@@ -35,26 +35,12 @@ const AIRTABLE_MSG_FIELD = "Message";
 
 /* --------------------------------- HELPERS -------------------------------- */
 
+// Accept ISO UTC with Z, with or without milliseconds.
 function isIsoUtcZ(v?: string): v is string {
-  return !!v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v);
+  return !!v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v);
 }
 
-// Calendar prefers local wall time (no Z) when you also provide timeZone
-function toLocalDateTimeString(isoUtcZ: string, timeZone: string) {
-  const d = new Date(isoUtcZ);
-  const s = d.toLocaleString("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }); // "YYYY-MM-DD HH:MM:SS"
-  return s.replace(" ", "T");
-}
-
+// Only used for formatting human-facing text (not for API payloads)
 function fmtInTz(isoUtcZ: string) {
   return new Date(isoUtcZ).toLocaleString("en-US", {
     timeZone: BOOKING_TZ,
@@ -193,7 +179,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as {
       start?: string; // ISO with Z
-      end?: string;   // ISO with Z
+      end?: string; // ISO with Z
       email?: string;
       summary?: string;
       description?: string;
@@ -206,23 +192,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Convert to wall clock strings for Calendar
-    const startLocal = toLocalDateTimeString(body.start!, BOOKING_TZ);
-    const endLocal = toLocalDateTimeString(body.end!, BOOKING_TZ);
+    // Use RFC3339 UTC straight through (no local conversion; no timeZone on fields)
+    const startUtc = body.start!;
+    const endUtc = body.end!;
 
     // Auth
     const refresh = await getRefreshToken();
     const auth = oauthClient(refresh);
     const calendar = google.calendar({ version: "v3", auth });
 
-    // Event (typed & mutable to satisfy googleapis)
+    // Event
     const event: calendar_v3.Schema$Event = {
       summary: body.summary || "Replicant — Intro Call",
       description:
         body.description ||
         "Auto-booked from website chat. Times shown and scheduled in Eastern Time.",
-      start: { dateTime: startLocal, timeZone: BOOKING_TZ },
-      end: { dateTime: endLocal, timeZone: BOOKING_TZ },
+      start: { dateTime: startUtc },
+      end: { dateTime: endUtc },
       ...(body.email ? { attendees: [{ email: body.email }] } : {}),
       conferenceData: {
         createRequest: {
@@ -245,7 +231,7 @@ export async function POST(req: NextRequest) {
       null;
 
     // Branded confirmation (noreply@replicantapp.com)
-    await sendConfirmationEmail(body.email, body.start!, body.end!, meetLink);
+    await sendConfirmationEmail(body.email, startUtc, endUtc, meetLink);
 
     return NextResponse.json(
       { ok: true, eventId: ev?.id, htmlLink: ev?.htmlLink, meetLink },
