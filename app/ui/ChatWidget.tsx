@@ -23,6 +23,42 @@ function dayLabel(d: Date) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+// simple preference sniffing (client-side hint only)
+function inferTimePrefFromLastUser(history: Hist): "morning" | "afternoon" | "evening" | "night" | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== "user") continue;
+    const t = history[i].content.toLowerCase();
+    if (/\b(morning|am)\b/.test(t)) return "morning";
+    if (/\b(afternoon)\b/.test(t)) return "afternoon";
+    if (/\b(evening)\b/.test(t)) return "evening";
+    if (/\b(tonight|night)\b/.test(t)) return "night";
+    break;
+  }
+  return null;
+}
+function filterSlotsByPref(slots: Slot[], pref: ReturnType<typeof inferTimePrefFromLastUser>) {
+  if (!pref) return slots;
+  const hour = (s: Slot) => {
+    // try to parse hour from label first, fallback to start
+    const m = s.label.match(/\b(\d{1,2}):?(\d{2})?\s?(AM|PM)\b/i);
+    if (m) {
+      let h = parseInt(m[1], 10);
+      const ampm = m[3].toUpperCase();
+      if (ampm === "PM" && h !== 12) h += 12;
+      if (ampm === "AM" && h === 12) h = 0;
+      return h;
+    }
+    return new Date(s.start).getUTCHours(); // rough fallback
+  };
+  switch (pref) {
+    case "morning": return slots.filter((s) => hour(s) < 12);
+    case "afternoon": return slots.filter((s) => hour(s) >= 12 && hour(s) < 17);
+    case "evening": return slots.filter((s) => hour(s) >= 17 && hour(s) <= 21);
+    case "night": return slots.filter((s) => hour(s) >= 19);
+    default: return slots;
+  }
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -43,10 +79,15 @@ export default function ChatWidget() {
     { label: "Pricing", value: "how much is it?" },
     { label: "Pay now", value: "pay now" },
   ]);
+
+  // NEW flags
+  const [promptedPickTime, setPromptedPickTime] = useState(false); // avoid duplicate "Pick a time…"
+  const [bookingAfterEmail, setBookingAfterEmail] = useState(false); // suppress interim "pick a time" texts while auto-booking
+
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // NEW: open when URL hash is #chat, and when the app dispatches `open-chat`
+  // open on #chat or open-chat event
   useEffect(() => {
     const fromHash = () => {
       try {
@@ -56,10 +97,9 @@ export default function ChatWidget() {
     const onHash = () => fromHash();
     const onOpenEvt = () => setOpen(true);
 
-    fromHash(); // initial load
+    fromHash();
     window.addEventListener("hashchange", onHash);
     window.addEventListener("open-chat", onOpenEvt as EventListener);
-
     return () => {
       window.removeEventListener("hashchange", onHash);
       window.removeEventListener("open-chat", onOpenEvt as EventListener);
@@ -82,6 +122,7 @@ export default function ChatWidget() {
         setAskedDayOnce(s.askedDayOnce ?? false);
         setPendingSlot(s.pendingSlot ?? null);
         setSuggestions(s.suggestions ?? suggestions);
+        setPromptedPickTime(s.promptedPickTime ?? false);
       } else {
         setMessages([
           { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
@@ -116,10 +157,24 @@ export default function ChatWidget() {
           askedDayOnce,
           pendingSlot,
           suggestions,
+          promptedPickTime,
         })
       );
     } catch {}
-  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, pendingSlot, suggestions]);
+  }, [
+    messages,
+    email,
+    slots,
+    date,
+    page,
+    showScheduler,
+    showDayPicker,
+    isTall,
+    askedDayOnce,
+    pendingSlot,
+    suggestions,
+    promptedPickTime,
+  ]);
 
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
@@ -158,18 +213,32 @@ export default function ChatWidget() {
         { label: "Pick a day", value: "book a call" },
         { label: "Keep explaining", value: "please keep explaining" },
       ]);
+      setPromptedPickTime(false);
       appendBot(data.text || "Here’s a secure checkout:");
       appendBot(`👉 ${data.url}`, { link: data.url });
       return;
     }
 
     if (data.type === "slots" && Array.isArray(data.slots)) {
+      if (bookingAfterEmail) {
+        // suppress slot prompts that may arrive as part of email-confirmation chatter
+        return;
+      }
       if (data.date) setDate(data.date);
+
+      // optional client-side preference filter
+      const pref = inferTimePrefFromLastUser(historyRef.current);
+      const pruned = filterSlotsByPref(data.slots, pref);
+
       setShowScheduler(true);
       setShowDayPicker(false);
-      setSlots(data.slots);
+      setSlots(pruned);
       setSuggestions([]);
-      appendBot(data.text || "Pick a time:");
+
+      if (!promptedPickTime) {
+        appendBot(data.text || "Pick a time that works (ET):");
+        setPromptedPickTime(true);
+      }
       return;
     }
 
@@ -179,27 +248,43 @@ export default function ChatWidget() {
       setShowDayPicker(false);
       setSuggestions([]);
       setPendingSlot(null);
+      setPromptedPickTime(false);
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
       appendBot(`All set!${when}${meet}`);
       return;
     }
 
-    if (data.type === "text" && data.text) {
-      appendBot(data.text);
-      setSuggestions([
-        { label: "Pick a day", value: "book a call" },
-        { label: "Keep explaining", value: "please keep explaining" },
-        { label: "Pricing", value: "how much is it?" },
-        { label: "Pay now", value: "pay now" },
-      ]);
+    if (data.type === "error") {
+      // Show error and close the scheduler to avoid stale prompts
+      setSlots(null);
+      setShowScheduler(false);
+      setShowDayPicker(false);
+      setPendingSlot(null);
+      setPromptedPickTime(false);
+      appendBot(data.text || "Something went wrong. Mind trying another time?");
       return;
     }
 
-    if (data.type === "error") {
-      appendBot(data.text || "Something went wrong. Mind trying again?");
+    if (data.type === "text" && data.text) {
+      // If we're in the auto-book-after-email flow, suppress generic “pick a time” style nudges.
+      if (bookingAfterEmail && /pick a time/i.test(data.text)) {
+        // ignore
+      } else {
+        appendBot(data.text);
+      }
+      // refresh chips only if not in scheduling flow
+      if (!showScheduler) {
+        setSuggestions([
+          { label: "Pick a day", value: "book a call" },
+          { label: "Keep explaining", value: "please keep explaining" },
+          { label: "Pricing", value: "how much is it?" },
+          { label: "Pay now", value: "pay now" },
+        ]);
+      }
       return;
     }
+
     if (data?.text) appendBot(data.text);
   }
 
@@ -214,15 +299,22 @@ export default function ChatWidget() {
       setBusy(true);
       try {
         const saved = await callBrain({ provideEmail: { email: val } });
-        await handleBrainResult(saved);
+
+        // If a pending slot exists, go straight to booking and suppress interim prompts
         if (pendingSlot) {
-          // auto-book the held slot now that we have email
+          setBookingAfterEmail(true);
+          // we intentionally do NOT append possible “pick a time” text from saved
+          // but still record email state:
+          if (saved?.email) setEmail(saved.email);
           const booked = await callBrain({
             pickSlot: { start: pendingSlot.start, end: pendingSlot.end, email: val },
           });
           await handleBrainResult(booked);
+        } else {
+          await handleBrainResult(saved);
         }
       } finally {
+        setBookingAfterEmail(false);
         setBusy(false);
       }
       return;
@@ -259,6 +351,7 @@ export default function ChatWidget() {
     setDate({ y, m, d: dd });
     setPage(0);
     setBusy(true);
+    setPromptedPickTime(false); // new day → new prompt cycle
     try {
       const data = await callBrain({ message: "book a call" });
       await handleBrainResult(data);
@@ -272,6 +365,7 @@ export default function ChatWidget() {
     setBusy(true);
     try {
       const data = await callBrain({ message: "book a call" });
+      // do NOT reset promptedPickTime here (avoids duplicate prompt)
       await handleBrainResult(data);
     } finally {
       setBusy(false);
@@ -285,6 +379,12 @@ export default function ChatWidget() {
     setPage(0);
     setAskedDayOnce(false);
     setPendingSlot(null);
+    setPromptedPickTime(false);
+    // Keep suggestions simple after reset
+    setSuggestions([
+      { label: "Pick a day", value: "book a call" },
+      { label: "Keep explaining", value: "please keep explaining" },
+    ]);
   }
 
   const dayButtons = nextNDays(14).map((d) => (
@@ -307,7 +407,7 @@ export default function ChatWidget() {
         <button
           onClick={() => setOpen(true)}
           data-chat-launcher
-          className="fixed bottom-6 right-6 z-[1000] rounded-full border border-slate-300 bg-white text-slate-900 shadow-lg px-5 py-3 text-sm font-medium hover:shadow-2xl transition"
+          className="fixed bottom-6 right-6 z-[1000] rounded-full border border-slate-300 bg-white text-slate-900 shadow-lg px-5 py-3 text-sm font-medium hover:shadow-2xl transition cursor-pointer"
           aria-label="Open chat"
         >
           Chat with us
