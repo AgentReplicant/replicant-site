@@ -157,7 +157,7 @@ export async function GET(req: Request) {
         const ehh = Math.floor(endMinutes / 60);
         const emm = endMinutes % 60;
 
-        // ISO UTC with Z (server expects Z)
+        // ISO UTC with Z
         const startIso = localTzToUtcIso(y, m, d, hh, mm, tz);
         const endIso = localTzToUtcIso(y, m, d, ehh, emm, tz);
 

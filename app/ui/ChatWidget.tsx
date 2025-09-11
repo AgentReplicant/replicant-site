@@ -24,7 +24,7 @@ function dayLabel(d: Date) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-// simple preference sniffing (client-side hint only)
+// preference sniff (client-side hint only)
 function inferTimePrefFromLastUser(history: Hist): "morning" | "afternoon" | "evening" | "night" | null {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role !== "user") continue;
@@ -72,7 +72,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [isTall, setIsTall] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
-  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // selected, waiting for confirm and/or email
+  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // selected, waiting confirm/email
   const [suggestions, setSuggestions] = useState([
     { label: "Pick a day", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
@@ -87,9 +87,8 @@ export default function ChatWidget() {
   const historyRef = useRef<Hist>([]);
   const clientIdRef = useRef<string>("");
 
-  // init
+  // init & clientId
   useEffect(() => {
-    // client id
     try {
       const fromLS = localStorage.getItem(CID_KEY);
       if (fromLS) {
@@ -99,6 +98,8 @@ export default function ChatWidget() {
         clientIdRef.current = cid;
         localStorage.setItem(CID_KEY, cid);
       }
+      // also set a cookie so the server can read it if it prefers cookies
+      document.cookie = `replicant_cid=${clientIdRef.current}; Path=/; Max-Age=31536000; SameSite=Lax`;
     } catch {}
 
     const fromHash = () => {
@@ -182,25 +183,26 @@ export default function ChatWidget() {
 
   async function callBrain(payload: any) {
     const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
-    const body = JSON.stringify({ ...payload, history: historyRef.current, filters, clientId: clientIdRef.current });
-    const res = await fetch("/api/chat", {
+    const cid = clientIdRef.current;
+    const body = JSON.stringify({ ...payload, history: historyRef.current, filters, clientId: cid });
+    const res = await fetch(`/api/chat?cid=${encodeURIComponent(cid)}`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-client-id": clientIdRef.current },
+      headers: { "content-type": "application/json", "x-client-id": cid },
       body,
     });
     return res.json();
   }
 
   async function handleBrainResult(data: any) {
-    if (data.email) setEmail(data.email);
+    if (data?.email) setEmail(data.email);
 
-    if (data.type === "need_email") {
+    if (data?.type === "need_email") {
       if (data.start && data.end) setPendingSlot({ start: data.start, end: data.end, label: data.when || "selected time" });
       appendBot(data.text || "What email should I use for the calendar invite?");
       return;
     }
 
-    if (data.type === "action" && data.action === "open_url" && data.url) {
+    if (data?.type === "action" && data.action === "open_url" && data.url) {
       setSlots(null);
       setShowScheduler(false);
       setShowDayPicker(false);
@@ -214,11 +216,10 @@ export default function ChatWidget() {
       return;
     }
 
-    if (data.type === "slots" && Array.isArray(data.slots)) {
-      if (bookingAfterEmail) return; // suppress interleaved “pick a time” during auto-book
-
+    if (data?.type === "slots" && Array.isArray(data.slots)) {
+      if (bookingAfterEmail) return; // suppress slot nudges mid auto-book
       if (data.date) setDate(data.date);
-      setPendingSlot(null); // reset any stale selection when new slots arrive
+      setPendingSlot(null); // new results invalidate old selection
 
       const pref = inferTimePrefFromLastUser(historyRef.current);
       const pruned = filterSlotsByPref(data.slots, pref);
@@ -235,7 +236,7 @@ export default function ChatWidget() {
       return;
     }
 
-    if (data.type === "booked") {
+    if (data?.type === "booked") {
       setSlots(null);
       setShowScheduler(false);
       setShowDayPicker(false);
@@ -248,7 +249,7 @@ export default function ChatWidget() {
       return;
     }
 
-    if (data.type === "error") {
+    if (data?.type === "error") {
       setSlots(null);
       setShowScheduler(false);
       setShowDayPicker(false);
@@ -258,9 +259,15 @@ export default function ChatWidget() {
       return;
     }
 
-    if (data.type === "text" && data.text) {
+    if (data?.type === "text" && data.text) {
+      // Override any phone-number requests to keep email-first flow
+      if (/phone\s*(number)?/i.test(data.text)) {
+        if (pendingSlot) setShowScheduler(false);
+        appendBot("Great — what’s the best email for the invite?");
+        return;
+      }
       if (bookingAfterEmail && /pick a time/i.test(data.text)) {
-        // ignore generic slot nudges while we're auto-booking
+        // ignore noisy nudges while auto-booking
       } else {
         appendBot(data.text);
       }
@@ -278,13 +285,13 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // sending
+  // send
 
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
-    // If user typed an email, store & (if pendingSlot) auto-book
+    // User typed an email → store & (if pending slot) auto-book
     if (!email && /@/.test(val)) {
       appendUser(val);
       setInput("");
@@ -319,12 +326,12 @@ export default function ChatWidget() {
   }
 
   async function pickSlot(slot: Slot) {
-    // Selection step first; ask user to confirm.
+    // Selection → ask to confirm
     if (!email) {
       setPendingSlot(slot);
-      return; // no immediate bot message; UI shows Confirm/Change
+      return; // UI shows confirm/change bar
     }
-    // If we already have email, we can book immediately
+    // Already have email → book now
     setBusy(true);
     try {
       const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } });
@@ -337,8 +344,7 @@ export default function ChatWidget() {
   async function confirmPending() {
     if (!pendingSlot) return;
     if (!email) {
-      // Hide picker to avoid confusion while we wait for email
-      setShowScheduler(false);
+      setShowScheduler(false); // hide grid while waiting for email
       appendBot("Great — what’s the best email for the invite?");
       return;
     }
@@ -552,11 +558,7 @@ export default function ChatWidget() {
                             >
                               Confirm
                             </button>
-                            <button
-                              onClick={changeTime}
-                              className="text-xs underline"
-                              disabled={busy}
-                            >
+                            <button onClick={changeTime} className="text-xs underline" disabled={busy}>
                               Change time
                             </button>
                           </div>
@@ -610,11 +612,7 @@ export default function ChatWidget() {
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
                 />
-                <button
-                  onClick={() => handleSend()}
-                  disabled={busy}
-                  className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50"
-                >
+                <button onClick={() => handleSend()} disabled={busy} className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50">
                   Send
                 </button>
               </div>
