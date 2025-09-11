@@ -18,20 +18,13 @@ if (SENDGRID_API_KEY) {
 const FROM_EMAIL = "noreply@replicantapp.com"; // branded sender
 const BCC_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || "";
 
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
+// SA-based config (replaces legacy OAuth)
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
 
-// Either provide GOOGLE_REFRESH_TOKEN, or we will fetch it from Airtable row "Google OAuth"
-const DIRECT_REFRESH = process.env.GOOGLE_REFRESH_TOKEN || "";
-
-const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN || "";
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "";
-const AIRTABLE_TABLE = "Leads";
-const AIRTABLE_NAME_FIELD = "Name";
-const AIRTABLE_MSG_FIELD = "Message";
+const GOOGLE_SA_JSON = process.env.GOOGLE_SA_JSON!;
+const GOOGLE_SA_IMPERSONATE = process.env.GOOGLE_SA_IMPERSONATE!;
+const SEND_GOOGLE_INVITES = (process.env.SEND_GOOGLE_INVITES || "").toLowerCase() === "true";
 
 /* --------------------------------- HELPERS -------------------------------- */
 
@@ -53,44 +46,15 @@ function fmtInTz(isoUtcZ: string) {
   });
 }
 
-async function fetchRefreshFromAirtable(): Promise<string | null> {
-  if (!AIRTABLE_TOKEN || !AIRTABLE_BASE_ID) return null;
-  try {
-    const url =
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE)}` +
-      `?maxRecords=1&filterByFormula=${encodeURIComponent(`{${AIRTABLE_NAME_FIELD}}="Google OAuth"`)}`;
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` },
-      cache: "no-store",
-    });
-    const j = await r.json();
-    const msg: string | undefined = j?.records?.[0]?.fields?.[AIRTABLE_MSG_FIELD];
-    if (!msg) return null;
-    try {
-      const parsed = JSON.parse(msg);
-      const token = parsed?.refresh_token;
-      return typeof token === "string" ? token : null;
-    } catch {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
-async function getRefreshToken(): Promise<string> {
-  if (DIRECT_REFRESH) return DIRECT_REFRESH;
-  const at = await fetchRefreshFromAirtable();
-  if (at) return at;
-  throw new Error(
-    "Missing Google refresh token. Set GOOGLE_REFRESH_TOKEN or ensure Airtable row 'Google OAuth' contains it."
-  );
-}
-
-function oauthClient(refreshToken: string) {
-  const client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-  client.setCredentials({ refresh_token: refreshToken });
-  return client;
+/** Build a GoogleAuth (JWT) client for SA + domain-wide impersonation */
+function getServiceAccountAuth(scopes: string[]) {
+  const creds = JSON.parse(GOOGLE_SA_JSON);
+  return new google.auth.JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes,
+    subject: GOOGLE_SA_IMPERSONATE, // impersonate Workspace user (noreply@replicantapp.com)
+  });
 }
 
 /** Minimal ICS (UTC) */
@@ -196,9 +160,12 @@ export async function POST(req: NextRequest) {
     const startUtc = body.start!;
     const endUtc = body.end!;
 
-    // Auth
-    const refresh = await getRefreshToken();
-    const auth = oauthClient(refresh);
+    // Auth (Service Account + impersonation)
+    const auth = getServiceAccountAuth([
+      "https://www.googleapis.com/auth/calendar.events",
+      // Add read scope if you also perform availability/freeBusy checks:
+      // "https://www.googleapis.com/auth/calendar.readonly",
+    ]);
     const calendar = google.calendar({ version: "v3", auth });
 
     // Event
@@ -221,7 +188,7 @@ export async function POST(req: NextRequest) {
     const { data: ev } = await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: event,
-      sendUpdates: "all",
+      sendUpdates: SEND_GOOGLE_INVITES ? "all" : "none",
       conferenceDataVersion: 1,
     });
 
