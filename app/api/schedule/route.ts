@@ -10,37 +10,33 @@ import sgMail from "@sendgrid/mail";
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
 if (SENDGRID_API_KEY) {
-  sgMail.setApiKey(SENDGRID_API_KEY);
+  try { sgMail.setApiKey(SENDGRID_API_KEY); } catch {}
 } else {
   console.warn("[schedule] SENDGRID_API_KEY not set — branded emails will be skipped.");
 }
 
-const FROM_EMAIL = "noreply@replicantapp.com"; // branded sender
+const FROM_EMAIL = "noreply@replicantapp.com";
 const BCC_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || "";
 
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
 
-// Either provide GOOGLE_REFRESH_TOKEN, or we will fetch it from Airtable row "Google OAuth"
-const DIRECT_REFRESH = process.env.GOOGLE_REFRESH_TOKEN || "";
-
-const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN || "";
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "";
-const AIRTABLE_TABLE = "Leads";
-const AIRTABLE_NAME_FIELD = "Name";
-const AIRTABLE_MSG_FIELD = "Message";
+// Service Account (JSON) + impersonation user
+const SA_JSON = process.env.GOOGLE_SA_JSON || "";
+const SA_IMPERSONATE = process.env.GOOGLE_SA_IMPERSONATE || "";
 
 /* --------------------------------- HELPERS -------------------------------- */
+
+function requireEnv(name: string, val?: string) {
+  if (!val) throw new Error(`Missing required env: ${name}`);
+}
 
 // Accept ISO UTC with Z, with or without milliseconds.
 function isIsoUtcZ(v?: string): v is string {
   return !!v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v);
 }
 
-// Only used for formatting human-facing text (not for API payloads)
+// Only for human-facing copy (not for API payloads)
 function fmtInTz(isoUtcZ: string) {
   return new Date(isoUtcZ).toLocaleString("en-US", {
     timeZone: BOOKING_TZ,
@@ -53,44 +49,23 @@ function fmtInTz(isoUtcZ: string) {
   });
 }
 
-async function fetchRefreshFromAirtable(): Promise<string | null> {
-  if (!AIRTABLE_TOKEN || !AIRTABLE_BASE_ID) return null;
-  try {
-    const url =
-      `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE)}` +
-      `?maxRecords=1&filterByFormula=${encodeURIComponent(`{${AIRTABLE_NAME_FIELD}}="Google OAuth"`)}`;
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` },
-      cache: "no-store",
-    });
-    const j = await r.json();
-    const msg: string | undefined = j?.records?.[0]?.fields?.[AIRTABLE_MSG_FIELD];
-    if (!msg) return null;
-    try {
-      const parsed = JSON.parse(msg);
-      const token = parsed?.refresh_token;
-      return typeof token === "string" ? token : null;
-    } catch {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
+/** Google Calendar client (SA + impersonation) — pass GoogleAuth (not getClient) to satisfy TS types */
+async function getCalendar(): Promise<calendar_v3.Calendar> {
+  requireEnv("GOOGLE_SA_JSON", SA_JSON);
+  requireEnv("GOOGLE_SA_IMPERSONATE", SA_IMPERSONATE);
 
-async function getRefreshToken(): Promise<string> {
-  if (DIRECT_REFRESH) return DIRECT_REFRESH;
-  const at = await fetchRefreshFromAirtable();
-  if (at) return at;
-  throw new Error(
-    "Missing Google refresh token. Set GOOGLE_REFRESH_TOKEN or ensure Airtable row 'Google OAuth' contains it."
-  );
-}
+  const credentials = JSON.parse(SA_JSON);
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    clientOptions: { subject: SA_IMPERSONATE },
+    scopes: [
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.readonly",
+    ],
+  });
 
-function oauthClient(refreshToken: string) {
-  const client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
-  client.setCredentials({ refresh_token: refreshToken });
-  return client;
+  // Important: pass the GoogleAuth object itself (types accept this)
+  return google.calendar({ version: "v3", auth }) as calendar_v3.Calendar;
 }
 
 /** Minimal ICS (UTC) */
@@ -173,13 +148,29 @@ async function sendConfirmationEmail(to: string, startUtc: string, endUtc: strin
   await sgMail.send(msg);
 }
 
+/** Check if the calendar is free in [startUtc, endUtc) */
+async function isFree(calendar: calendar_v3.Calendar, calendarId: string, startUtc: string, endUtc: string) {
+  const { data } = await calendar.freebusy.query({
+    requestBody: {
+      timeMin: startUtc,
+      timeMax: endUtc,
+      timeZone: "UTC",
+      items: [{ id: calendarId }],
+    },
+  });
+
+  const cal = (data.calendars as any)?.[calendarId];
+  const busy = cal?.busy ?? [];
+  return !busy || busy.length === 0;
+}
+
 /* ---------------------------------- ROUTE --------------------------------- */
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as {
       start?: string; // ISO with Z
-      end?: string; // ISO with Z
+      end?: string;   // ISO with Z
       email?: string;
       summary?: string;
       description?: string;
@@ -192,16 +183,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Use RFC3339 UTC straight through (no local conversion; no timeZone on fields)
     const startUtc = body.start!;
     const endUtc = body.end!;
+    const attendeeEmail = body.email!;
 
-    // Auth
-    const refresh = await getRefreshToken();
-    const auth = oauthClient(refresh);
-    const calendar = google.calendar({ version: "v3", auth });
+    const calendar = await getCalendar();
 
-    // Event
+    // Availability check (prevents stacking)
+    try {
+      const free = await isFree(calendar, CALENDAR_ID, startUtc, endUtc);
+      if (!free) {
+        return NextResponse.json(
+          { error: "That time was just taken. Please pick another.", code: "SLOT_TAKEN" },
+          { status: 409 }
+        );
+      }
+    } catch (e: any) {
+      const msg = e?.errors?.[0]?.message || e?.message || "freeBusy query failed";
+      console.error("[schedule] freebusy error:", msg);
+      return NextResponse.json(
+        {
+          error:
+            "Availability check failed. Ensure the Service Account has domain-wide delegation for https://www.googleapis.com/auth/calendar.readonly.",
+          google: msg,
+        },
+        { status: 500 }
+      );
+    }
+
     const event: calendar_v3.Schema$Event = {
       summary: body.summary || "Replicant — Intro Call",
       description:
@@ -209,7 +218,7 @@ export async function POST(req: NextRequest) {
         "Auto-booked from website chat. Times shown and scheduled in Eastern Time.",
       start: { dateTime: startUtc },
       end: { dateTime: endUtc },
-      ...(body.email ? { attendees: [{ email: body.email }] } : {}),
+      attendees: [{ email: attendeeEmail }],
       conferenceData: {
         createRequest: {
           requestId: `replicant-${Date.now()}`,
@@ -230,8 +239,7 @@ export async function POST(req: NextRequest) {
       ev?.conferenceData?.entryPoints?.find((p) => p?.entryPointType === "video")?.uri ||
       null;
 
-    // Branded confirmation (noreply@replicantapp.com)
-    await sendConfirmationEmail(body.email, startUtc, endUtc, meetLink);
+    await sendConfirmationEmail(attendeeEmail, startUtc, endUtc, meetLink);
 
     return NextResponse.json(
       { ok: true, eventId: ev?.id, htmlLink: ev?.htmlLink, meetLink },
