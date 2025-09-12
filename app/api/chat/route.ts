@@ -9,25 +9,21 @@ type Filters = { date?: { y: number; m: number; d: number }; page?: number };
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({} as any));
-  const message: string | undefined = body?.message;
   const provideEmail: { email?: string } | undefined = body?.provideEmail;
   const pickSlot:
     | { start: string; end: string; email?: string; when?: string }
     | undefined = body?.pickSlot;
   const filters: Filters | undefined = body?.filters;
-  const history: HistMsg[] | undefined = body?.history;
 
   const origin =
     process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
 
-  // Keep the last known email if it was just provided
   const emailFromProvide = provideEmail?.email?.trim();
 
-  // ---- Booking flow --------------------------------------------------------
+  // -------------------- BOOKING --------------------
   if (pickSlot) {
     const email = (pickSlot.email || emailFromProvide || "").trim();
     if (!email) {
-      // Ask client for email but keep the selected slot details
       return NextResponse.json({
         type: "need_email",
         text: "What email should I use for the calendar invite?",
@@ -37,7 +33,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Try to book via /api/schedule (your existing scheduler)
     try {
       const r = await fetch(`${origin}/api/schedule`, {
         method: "POST",
@@ -49,7 +44,6 @@ export async function POST(req: NextRequest) {
         }),
         cache: "no-store",
       });
-
       const j = await r.json().catch(() => ({} as any));
 
       if (r.ok && j?.ok) {
@@ -60,7 +54,6 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Booking failed (time might have been taken)
       return NextResponse.json({
         type: "error",
         text:
@@ -76,9 +69,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ---- Slots flow ----------------------------------------------------------
-  // Use the date/page coming from the widget so “today”, “tomorrow”, “Sun”, etc.
-  // show the right day. We do NOT filter out disabled entries here.
+  // -------------------- SLOTS --------------------
   const date = filters?.date;
   const page = Number(filters?.page ?? 0);
 
@@ -88,20 +79,22 @@ export async function POST(req: NextRequest) {
     slotsUrl.searchParams.set("m", String(date.m).padStart(2, "0"));
     slotsUrl.searchParams.set("d", String(date.d).padStart(2, "0"));
   } else {
-    // fallback: let /api/slots decide, typically the next N days
     slotsUrl.searchParams.set("days", "14");
   }
-  // Keep this in sync with the widget’s “page size”
   slotsUrl.searchParams.set("limit", "6");
   slotsUrl.searchParams.set("page", String(page));
+
+  // >>> Force a 60-minute lead (only effective if /api/slots honors it)
+  slotsUrl.searchParams.set("lead", "60");
+  slotsUrl.searchParams.set("leadMins", "60");
+  slotsUrl.searchParams.set("lead_minutes", "60");
 
   try {
     const r = await fetch(slotsUrl.toString(), { cache: "no-store" });
     const j = await r.json().catch(() => ({} as any));
     const slots = Array.isArray(j?.slots) ? j.slots : [];
 
-    // CRITICAL: do not filter out disabled items here.
-    // The widget will show them greyed/crossed and unclickable.
+    // Do NOT filter disabled here. The UI needs them to gray out.
     return NextResponse.json({
       type: "slots",
       text: "Pick a time that works (ET):",
@@ -109,7 +102,7 @@ export async function POST(req: NextRequest) {
       total: slots.length,
       slots,
     });
-  } catch (err) {
+  } catch {
     return NextResponse.json({
       type: "error",
       text: "Couldn’t load times right now. Please try again.",
