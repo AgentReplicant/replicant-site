@@ -4,11 +4,10 @@
 import React, { useEffect, useRef, useState } from "react";
 
 type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
-type Slot = { start: string; end: string; label: string };
+type Slot = { start: string; end: string; label: string; busy?: boolean }; // ← busy supported
 type Hist = { role: "user" | "assistant"; content: string }[];
 
 const STORE_KEY = "replicant_chat_v8";
-const CID_KEY = "replicant_client_id";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n = 14) {
@@ -24,7 +23,7 @@ function dayLabel(d: Date) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-// preference sniff (client-side hint only)
+// preference hint
 function inferTimePrefFromLastUser(history: Hist): "morning" | "afternoon" | "evening" | "night" | null {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role !== "user") continue;
@@ -43,20 +42,24 @@ function filterSlotsByPref(slots: Slot[], pref: ReturnType<typeof inferTimePrefF
     const m = s.label.match(/\b(\d{1,2}):?(\d{2})?\s?(AM|PM)\b/i);
     if (m) {
       let h = parseInt(m[1], 10);
-      const ampm = m[3].toUpperCase();
-      if (ampm === "PM" && h !== 12) h += 12;
-      if (ampm === "AM" && h === 12) h = 0;
+      const ap = m[3].toUpperCase();
+      if (ap === "PM" && h !== 12) h += 12;
+      if (ap === "AM" && h === 12) h = 0;
       return h;
     }
     return new Date(s.start).getUTCHours();
   };
   switch (pref) {
-    case "morning": return slots.filter((s) => hour(s) < 12);
+    case "morning":   return slots.filter((s) => hour(s) < 12);
     case "afternoon": return slots.filter((s) => hour(s) >= 12 && hour(s) < 17);
-    case "evening": return slots.filter((s) => hour(s) >= 17 && hour(s) <= 21);
-    case "night": return slots.filter((s) => hour(s) >= 19);
-    default: return slots;
+    case "evening":   return slots.filter((s) => hour(s) >= 17 && hour(s) <= 21);
+    case "night":     return slots.filter((s) => hour(s) >= 19);
+    default:          return slots;
   }
+}
+
+function looksLikeBookedText(t: string) {
+  return /\b(all set|scheduled|you're booked|your call is scheduled)\b/i.test(t);
 }
 
 export default function ChatWidget() {
@@ -72,7 +75,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [isTall, setIsTall] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
-  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // selected, waiting confirm/email
+  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null);
   const [suggestions, setSuggestions] = useState([
     { label: "Pick a day", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
@@ -85,23 +88,9 @@ export default function ChatWidget() {
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
-  const clientIdRef = useRef<string>("");
 
-  // init & clientId
+  // open on #chat or open-chat event
   useEffect(() => {
-    try {
-      const fromLS = localStorage.getItem(CID_KEY);
-      if (fromLS) {
-        clientIdRef.current = fromLS;
-      } else {
-        const cid = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-        clientIdRef.current = cid;
-        localStorage.setItem(CID_KEY, cid);
-      }
-      // also set a cookie so the server can read it if it prefers cookies
-      document.cookie = `replicant_cid=${clientIdRef.current}; Path=/; Max-Age=31536000; SameSite=Lax`;
-    } catch {}
-
     const fromHash = () => {
       try {
         if (typeof window !== "undefined" && location.hash === "#chat") setOpen(true);
@@ -137,10 +126,14 @@ export default function ChatWidget() {
         setSuggestions(s.suggestions ?? suggestions);
         setPromptedPickTime(s.promptedPickTime ?? false);
       } else {
-        setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
+        setMessages([
+          { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+        ]);
       }
     } catch {
-      setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
+      setMessages([
+        { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+      ]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -170,7 +163,20 @@ export default function ChatWidget() {
         })
       );
     } catch {}
-  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, pendingSlot, suggestions, promptedPickTime]);
+  }, [
+    messages,
+    email,
+    slots,
+    date,
+    page,
+    showScheduler,
+    showDayPicker,
+    isTall,
+    askedDayOnce,
+    pendingSlot,
+    suggestions,
+    promptedPickTime,
+  ]);
 
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
@@ -183,14 +189,24 @@ export default function ChatWidget() {
 
   async function callBrain(payload: any) {
     const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
-    const cid = clientIdRef.current;
-    const body = JSON.stringify({ ...payload, history: historyRef.current, filters, clientId: cid });
-    const res = await fetch(`/api/chat?cid=${encodeURIComponent(cid)}`, {
+    const res = await fetch("/api/chat", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-client-id": cid },
-      body,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
     });
     return res.json();
+  }
+
+  async function reopenSchedulerWithFreshTimes(nudge?: string) {
+    if (nudge) appendBot(nudge);
+    setShowScheduler(true);
+    setShowDayPicker(false);
+    setSlots(null);
+    setPendingSlot(null);
+    setPromptedPickTime(false);
+    setSuggestions([]);
+    const data = await callBrain({ message: "book a call" });
+    await handleBrainResult(data);
   }
 
   async function handleBrainResult(data: any) {
@@ -217,12 +233,12 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "slots" && Array.isArray(data.slots)) {
-      if (bookingAfterEmail) return; // suppress slot nudges mid auto-book
+      if (bookingAfterEmail) return;
       if (data.date) setDate(data.date);
-      setPendingSlot(null); // new results invalidate old selection
 
+      // busy-aware
       const pref = inferTimePrefFromLastUser(historyRef.current);
-      const pruned = filterSlotsByPref(data.slots, pref);
+      const pruned = filterSlotsByPref(data.slots as Slot[], pref);
 
       setShowScheduler(true);
       setShowDayPicker(false);
@@ -250,6 +266,15 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "error") {
+      if (data.code === "SLOT_TAKEN" || /slot.*taken/i.test(data.text || "")) {
+        setSlots(null);
+        setShowScheduler(false);
+        setShowDayPicker(false);
+        setPendingSlot(null);
+        setPromptedPickTime(false);
+        await reopenSchedulerWithFreshTimes("That time was just taken — here are the latest available times:");
+        return;
+      }
       setSlots(null);
       setShowScheduler(false);
       setShowDayPicker(false);
@@ -260,14 +285,12 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "text" && data.text) {
-      // Override any phone-number requests to keep email-first flow
-      if (/phone\s*(number)?/i.test(data.text)) {
-        if (pendingSlot) setShowScheduler(false);
-        appendBot("Great — what’s the best email for the invite?");
+      if (looksLikeBookedText(data.text)) {
+        await reopenSchedulerWithFreshTimes("Let’s lock it in — pick a time below:");
         return;
       }
       if (bookingAfterEmail && /pick a time/i.test(data.text)) {
-        // ignore noisy nudges while auto-booking
+        // ignore
       } else {
         appendBot(data.text);
       }
@@ -285,20 +308,16 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // send
-
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
-    // User typed an email → store & (if pending slot) auto-book
     if (!email && /@/.test(val)) {
       appendUser(val);
       setInput("");
       setBusy(true);
       try {
         const saved = await callBrain({ provideEmail: { email: val } });
-
         if (pendingSlot) {
           setBookingAfterEmail(true);
           if (saved?.email) setEmail(saved.email);
@@ -326,12 +345,12 @@ export default function ChatWidget() {
   }
 
   async function pickSlot(slot: Slot) {
-    // Selection → ask to confirm
+    if (slot.busy) return; // cannot pick busy slots
     if (!email) {
       setPendingSlot(slot);
-      return; // UI shows confirm/change bar
+      appendBot("Great — what’s the best email for the invite?");
+      return;
     }
-    // Already have email → book now
     setBusy(true);
     try {
       const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } });
@@ -341,27 +360,12 @@ export default function ChatWidget() {
     }
   }
 
-  async function confirmPending() {
-    if (!pendingSlot) return;
-    if (!email) {
-      setShowScheduler(false); // hide grid while waiting for email
-      appendBot("Great — what’s the best email for the invite?");
-      return;
-    }
-    await pickSlot(pendingSlot);
-  }
-
-  function changeTime() {
-    setPendingSlot(null); // re-enable grid
-  }
-
   async function chooseDay(d: Date) {
     const { y, m, d: dd } = ymd(d);
     setDate({ y, m, d: dd });
     setPage(0);
     setBusy(true);
     setPromptedPickTime(false);
-    setPendingSlot(null);
     try {
       const data = await callBrain({ message: "book a call" });
       await handleBrainResult(data);
@@ -432,10 +436,18 @@ export default function ChatWidget() {
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
               <div className="font-semibold text-sm text-slate-900">Replicant Assistant</div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setIsTall((v) => !v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">
+                <button
+                  onClick={() => setIsTall((v) => !v)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Toggle height"
+                >
                   {isTall ? "Minimize" : "Maximize"}
                 </button>
-                <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">
+                <button
+                  onClick={() => setOpen(false)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Close chat"
+                >
                   ✕
                 </button>
               </div>
@@ -447,7 +459,9 @@ export default function ChatWidget() {
                 <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${
-                      m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"
+                      m.role === "user"
+                        ? "bg-black text-white border-black/20"
+                        : "bg-white text-black border-gray-200"
                     }`}
                   >
                     <div className="text-[13px] leading-relaxed">{m.text}</div>
@@ -515,16 +529,19 @@ export default function ChatWidget() {
                       <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
                       <div className="flex flex-wrap gap-2">
                         {slots.map((s) => {
-                          const selected = pendingSlot?.start === s.start && pendingSlot?.end === s.end;
+                          const disabled = !!s.busy;
                           return (
                             <button
-                              key={s.start}
+                              key={`${s.start}-${s.end}`}
                               onClick={() => pickSlot(s)}
+                              disabled={busy || disabled}
+                              aria-disabled={disabled}
+                              title={disabled ? "Busy/unavailable" : undefined}
                               className={`text-xs border rounded-full px-3 py-1 transition ${
-                                selected ? "bg-black text-white" : "hover:bg-black hover:text-white"
+                                disabled
+                                  ? "opacity-40 cursor-not-allowed"
+                                  : "hover:bg-black hover:text-white"
                               }`}
-                              disabled={busy || !!pendingSlot}
-                              title={s.label}
                             >
                               {s.label}
                             </button>
@@ -533,37 +550,18 @@ export default function ChatWidget() {
                         <button
                           onClick={showMoreTimes}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                          disabled={busy || !!pendingSlot}
+                          disabled={busy}
                         >
                           More times →
                         </button>
                         <button
                           onClick={() => setShowDayPicker(true)}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                          disabled={busy || !!pendingSlot}
+                          disabled={busy}
                         >
                           ← Change day
                         </button>
                       </div>
-
-                      {/* Confirm bar */}
-                      {pendingSlot && (
-                        <div className="mt-3 p-2 border-t text-xs flex items-center justify-between">
-                          <div>You picked <span className="font-medium">{pendingSlot.label}</span>.</div>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={confirmPending}
-                              className="text-xs px-3 py-1 rounded-full bg-black text-white disabled:opacity-60"
-                              disabled={busy}
-                            >
-                              Confirm
-                            </button>
-                            <button onClick={changeTime} className="text-xs underline" disabled={busy}>
-                              Change time
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -585,7 +583,7 @@ export default function ChatWidget() {
                           setShowScheduler(true);
                           setShowDayPicker(true);
                           if (!askedDayOnce) {
-                            appendBot("Which day works for you? (Times are shown in Eastern Time.)");
+                            appendBot("Which day works for you?");
                             setAskedDayOnce(true);
                           }
                         } else {
@@ -612,7 +610,11 @@ export default function ChatWidget() {
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
                 />
-                <button onClick={() => handleSend()} disabled={busy} className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50">
+                <button
+                  onClick={() => handleSend()}
+                  disabled={busy}
+                  className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50"
+                >
                   Send
                 </button>
               </div>
