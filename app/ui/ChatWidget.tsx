@@ -4,13 +4,10 @@
 import React, { useEffect, useRef, useState } from "react";
 
 type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
-
-// NOTE: slot now supports `disabled`
 type Slot = { start: string; end: string; label: string; disabled?: boolean };
-
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v8";
+const STORE_KEY = "replicant_chat_v9";
 type DateFilter = { y: number; m: number; d: number } | null;
 
 function nextNDays(n = 14) {
@@ -26,7 +23,7 @@ function dayLabel(d: Date) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-// simple preference sniffing (client-side hint only)
+// preference sniffing (client-side hint only)
 function inferTimePrefFromLastUser(history: Hist): "morning" | "afternoon" | "evening" | "night" | null {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role !== "user") continue;
@@ -61,6 +58,44 @@ function filterSlotsByPref(slots: Slot[], pref: ReturnType<typeof inferTimePrefF
   }
 }
 
+/** Resolve phrases like "today", "tomorrow", "sunday", "next friday" to a Date */
+function resolvePhraseToDate(input: string): Date | null {
+  const s = input.trim().toLowerCase();
+  const now = new Date();
+
+  if (s === "today") return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (/\btonight\b/.test(s) || /\bthis\s+(morning|afternoon|evening)\b/.test(s))
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (/\btomorrow\b/.test(s))
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+  const dowMap: Record<string, number> = {
+    sun: 0, sunday: 0,
+    mon: 1, monday: 1,
+    tue: 2, tues: 2, tuesday: 2,
+    wed: 3, weds: 3, wednesday: 3,
+    thu: 4, thur: 4, thurs: 4, thursday: 4,
+    fri: 5, friday: 5,
+    sat: 6, saturday: 6,
+  };
+  const m = s.match(/\b(next|this)?\s*(sun(day)?|mon(day)?|tue(s|sday)?|wed(nesday|s)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?)\b/);
+  if (m) {
+    const qualifier = (m[1] || "").toLowerCase();
+    const wk = m[2].toLowerCase();
+    const keys = Object.keys(dowMap);
+    const key = keys.find((k) => wk.startsWith(k)) || wk;
+    const target = dowMap[key] ?? null;
+    if (target !== null) {
+      const cur = now.getDay();
+      let delta = (target - cur + 7) % 7; // upcoming occurrence
+      if (qualifier === "next") delta = delta === 0 ? 7 : delta;
+      // "this" keeps delta as-is; bare weekday on same day = today
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate() + delta);
+    }
+  }
+  return null;
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -74,66 +109,20 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [isTall, setIsTall] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
-  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // <-- holds slot waiting for email
+  const [pendingSlot, setPendingSlot] = useState<Slot | null>(null); // selection awaiting email/confirm
   const [suggestions, setSuggestions] = useState([
     { label: "Pick a day", value: "book a call" },
     { label: "Keep explaining", value: "please keep explaining" },
     { label: "Pricing", value: "how much is it?" },
     { label: "Pay now", value: "pay now" },
   ]);
-
-  // NEW flags
-  const [promptedPickTime, setPromptedPickTime] = useState(false); // avoid duplicate "Pick a time…"
-  const [bookingAfterEmail, setBookingAfterEmail] = useState(false); // suppress interim texts while auto-booking
+  const [promptedPickTime, setPromptedPickTime] = useState(false);
+  const [bookingAfterEmail, setBookingAfterEmail] = useState(false);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // ---- helpers: UI append ----
-  function appendUser(text: string) {
-    setMessages((m) => [...m, { role: "user", text }]);
-    historyRef.current.push({ role: "user", content: text });
-  }
-  function appendBot(text: string, meta?: { link?: string }) {
-    setMessages((m) => [...m, { role: "bot", text, meta }]);
-    historyRef.current.push({ role: "assistant", content: text });
-  }
-
-  // ---- helpers: server calls ----
-  async function callBrain(payload: any) {
-    const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
-    });
-    return res.json();
-  }
-
-  // NEW: fetch slots directly from /api/slots (always returns disabled + available)
-  async function fetchSlotsFor(dateToUse: DateFilter, pageToUse: number) {
-    const params = new URLSearchParams();
-    const limit = 6; // quick picks per page
-    params.set("limit", String(limit));
-    params.set("page", String(pageToUse));
-    if (dateToUse) {
-      params.set("y", String(dateToUse.y));
-      params.set("m", String(dateToUse.m).padStart(2, "0"));
-      params.set("d", String(dateToUse.d).padStart(2, "0"));
-    } else {
-      params.set("days", "7");
-    }
-    const r = await fetch(`/api/slots?${params.toString()}`, { cache: "no-store" });
-    const j = await r.json().catch(() => ({ ok: false, slots: [] as Slot[] }));
-    let list: Slot[] = Array.isArray(j?.slots) ? j.slots : [];
-    // client-side time-of-day preference (optional)
-    const pref = inferTimePrefFromLastUser(historyRef.current);
-    list = filterSlotsByPref(list, pref);
-    setSlots(list);
-  }
-
-  // ---- lifecycle ----
-  // open on #chat or open-chat event
+  // open on #chat or open-chat
   useEffect(() => {
     const fromHash = () => {
       try {
@@ -142,7 +131,6 @@ export default function ChatWidget() {
     };
     const onHash = () => fromHash();
     const onOpenEvt = () => setOpen(true);
-
     fromHash();
     window.addEventListener("hashchange", onHash);
     window.addEventListener("open-chat", onOpenEvt as EventListener);
@@ -170,14 +158,10 @@ export default function ChatWidget() {
         setSuggestions(s.suggestions ?? suggestions);
         setPromptedPickTime(s.promptedPickTime ?? false);
       } else {
-        setMessages([
-          { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
-        ]);
+        setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
       }
     } catch {
-      setMessages([
-        { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
-      ]);
+      setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -222,31 +206,32 @@ export default function ChatWidget() {
     promptedPickTime,
   ]);
 
-  // if LLM sends “Pick a time…”, auto-load today’s times once
-  function maybeAutoLoadToday(text: string) {
-    if (/pick a time that works/i.test(text) && showScheduler && !slots) {
-      const d = new Date();
-      const df = { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
-      setDate(df);
-      void (async () => {
-        setBusy(true);
-        try {
-          await fetchSlotsFor(df, 0);
-          setPromptedPickTime(true);
-        } finally {
-          setBusy(false);
-        }
-      })();
-    }
+  function appendUser(text: string) {
+    setMessages((m) => [...m, { role: "user", text }]);
+    historyRef.current.push({ role: "user", content: text });
+  }
+  function appendBot(text: string, meta?: { link?: string }) {
+    setMessages((m) => [...m, { role: "bot", text, meta }]);
+    historyRef.current.push({ role: "assistant", content: text });
   }
 
-  // ---- brain results handler ----
+  async function callBrain(payload: any) {
+    const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
+    });
+    return res.json();
+  }
+
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
 
     if (data?.type === "need_email") {
-      if (data.start && data.end) setPendingSlot({ start: data.start, end: data.end, label: data.when || "selected time" });
-      appendBot(data.text || "What email should I use for the calendar invite?");
+      if (data.start && data.end)
+        setPendingSlot({ start: data.start, end: data.end, label: data.when || "selected time" });
+      // we'll show the inline confirm bar; no extra chat bubble needed
       return;
     }
 
@@ -265,14 +250,32 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "slots" && Array.isArray(data.slots)) {
-      // We no longer rely on this branch for times, but keep it as a fallback
+      if (bookingAfterEmail) return; // suppress during auto-book
+      if (data.date) setDate(data.date);
+
+      const pref = inferTimePrefFromLastUser(historyRef.current);
+      const pruned: Slot[] = filterSlotsByPref(
+        data.slots.map((s: any) => ({
+          start: s.start,
+          end: s.end,
+          label: s.label,
+          disabled: !!s.disabled,
+        })),
+        pref
+      );
+
       setShowScheduler(true);
       setShowDayPicker(false);
+      setSlots(pruned);
       setSuggestions([]);
-      setSlots(data.slots);
       if (!promptedPickTime) {
         appendBot(data.text || "Pick a time that works (ET):");
         setPromptedPickTime(true);
+      }
+
+      // Empty safety: if no slots were returned at all AND no explicit date, re-open day picker.
+      if (pruned.length === 0 && !data.date) {
+        setShowDayPicker(true);
       }
       return;
     }
@@ -291,24 +294,18 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "error") {
-      // Show error and re-open the scheduler with fresh times for the selected day
+      // Show error; keep scheduler open so user can immediately retry
       appendBot(data.text || "Something went wrong. Mind trying another time?");
-      if (date) {
-        setShowScheduler(true);
-        setShowDayPicker(false);
-        setBusy(true);
-        try {
-          await fetchSlotsFor(date, page);
-        } finally {
-          setBusy(false);
-        }
-      }
+      setPendingSlot(null);
       return;
     }
 
-    if (data?.text) {
-      appendBot(data.text);
-      maybeAutoLoadToday(data.text);
+    if (data?.type === "text" && data.text) {
+      if (bookingAfterEmail && /pick a time/i.test(data.text)) {
+        // suppress generic nudge during auto-book
+      } else {
+        appendBot(data.text);
+      }
       if (!showScheduler) {
         setSuggestions([
           { label: "Pick a day", value: "book a call" },
@@ -319,12 +316,22 @@ export default function ChatWidget() {
       }
       return;
     }
+
+    if (data?.text) appendBot(data.text);
   }
 
-  // ---- sending ----
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
+
+    // Natural date phrases -> choose that day directly
+    const phraseDate = resolvePhraseToDate(val);
+    if (phraseDate) {
+      appendUser(val);
+      setInput("");
+      await chooseDay(phraseDate);
+      return;
+    }
 
     // If user typed an email, store & (if pendingSlot) auto-book
     if (!email && /@/.test(val)) {
@@ -362,49 +369,45 @@ export default function ChatWidget() {
     }
   }
 
-  // ---- scheduling actions ----
   async function pickSlot(slot: Slot) {
-    if (slot.disabled) return; // unclickable by UI, but guard as well
-    if (!email) {
-      setPendingSlot(slot);
-      appendBot("Great — what’s the best email for the invite?");
+    if (slot.disabled) return;
+    // show inline confirm bar inside scheduler
+    setPendingSlot(slot);
+
+    // If we already have email, book immediately
+    if (email) {
+      setBusy(true);
+      try {
+        const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } });
+        await handleBrainResult(data);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
+    // otherwise wait for email typed by the user (inline hint shown in UI)
+  }
+
+  async function chooseDay(d: Date) {
+    const { y, m, d: dd } = ymd(d);
+    setDate({ y, m, d: dd });
+    setPage(0);
     setBusy(true);
+    setPromptedPickTime(false); // new day → new prompt cycle
     try {
-      const data = await callBrain({ pickSlot: { start: slot.start, end: slot.end, email } });
+      const data = await callBrain({ message: "book a call" });
       await handleBrainResult(data);
     } finally {
       setBusy(false);
     }
   }
 
-  async function chooseDay(d: Date) {
-    const df = ymd(d);
-    setDate(df);
-    setPage(0);
-    setBusy(true);
-    setPromptedPickTime(false);
-    try {
-      await fetchSlotsFor(df, 0);
-      if (!promptedPickTime) {
-        appendBot("Pick a time that works (ET):");
-        setPromptedPickTime(true);
-      }
-      setShowDayPicker(false);
-      setShowScheduler(true);
-      setSuggestions([]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function showMoreTimes() {
-    const next = page + 1;
-    setPage(next);
+    setPage((p) => p + 1);
     setBusy(true);
     try {
-      await fetchSlotsFor(date, next);
+      const data = await callBrain({ message: "book a call" });
+      await handleBrainResult(data);
     } finally {
       setBusy(false);
     }
@@ -429,7 +432,9 @@ export default function ChatWidget() {
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString() ? "bg-black text-white" : ""
+        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+          ? "bg-black text-white"
+          : ""
       }`}
       disabled={busy}
       title={d.toLocaleDateString()}
@@ -540,7 +545,7 @@ export default function ChatWidget() {
                   )}
 
                   {slots && (
-                    <div className="px-3 py-2 border-t">
+                    <div className="px-3 py-2">
                       <div className="text-xs text-gray-600 mb-1">
                         {date
                           ? `Times for ${new Date(date.y, date.m - 1, date.d).toLocaleDateString("en-US", {
@@ -552,22 +557,28 @@ export default function ChatWidget() {
                         :
                       </div>
                       <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
+
                       <div className="flex flex-wrap gap-2">
-                        {slots.map((s) => (
-                          <button
-                            key={s.start}
-                            onClick={() => pickSlot(s)}
-                            className={`text-xs border rounded-full px-3 py-1 transition ${
-                              s.disabled
-                                ? "opacity-50 cursor-not-allowed line-through"
-                                : "hover:bg-black hover:text-white"
-                            }`}
-                            disabled={busy || !!s.disabled}
-                            title={s.label}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
+                        {(slots ?? []).map((s) => {
+                          const isSelected = pendingSlot?.start === s.start && pendingSlot?.end === s.end;
+                          const base =
+                            "text-xs border rounded-full px-3 py-1 transition " +
+                            (s.disabled
+                              ? "opacity-50 line-through cursor-not-allowed"
+                              : "hover:bg-black hover:text-white cursor-pointer");
+                          const sel = isSelected ? " bg-black text-white" : "";
+                          return (
+                            <button
+                              key={s.start}
+                              onClick={() => pickSlot(s)}
+                              className={base + sel}
+                              disabled={busy || !!s.disabled}
+                              title={s.disabled ? "Unavailable" : "Available"}
+                            >
+                              {s.label}
+                            </button>
+                          );
+                        })}
                         <button
                           onClick={showMoreTimes}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
@@ -576,7 +587,10 @@ export default function ChatWidget() {
                           More times →
                         </button>
                         <button
-                          onClick={() => setShowDayPicker(true)}
+                          onClick={() => {
+                            setShowDayPicker(true);
+                            setPendingSlot(null);
+                          }}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                           disabled={busy}
                         >
@@ -584,11 +598,12 @@ export default function ChatWidget() {
                         </button>
                       </div>
 
-                      {/* Confirm bar (visible immediately after a slot is selected without email on file) */}
-                      {pendingSlot && !email && (
-                        <div className="mt-3 rounded-lg border p-2 bg-slate-50">
-                          <div className="text-xs text-gray-700 mb-2">
-                            Selected: <span className="font-medium">{pendingSlot.label}</span>
+                      {/* Inline confirm bar */}
+                      {pendingSlot && (
+                        <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border px-3 py-2">
+                          <div className="text-xs">
+                            <span className="font-medium">Selected:</span>{" "}
+                            {pendingSlot.label || "Chosen time"}
                           </div>
                           <div className="flex items-center gap-3">
                             <button
@@ -598,16 +613,9 @@ export default function ChatWidget() {
                             >
                               Change time
                             </button>
-                            <input
-                              className="flex-1 text-xs border rounded-md px-2 py-1"
-                              placeholder="Enter your email to confirm"
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  const v = (e.target as HTMLInputElement).value.trim();
-                                  if (v) void handleSend(v);
-                                }
-                              }}
-                            />
+                            <div className="text-xs text-gray-600 hidden sm:block">
+                              Enter your email to confirm
+                            </div>
                           </div>
                         </div>
                       )}
