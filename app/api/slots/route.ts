@@ -5,6 +5,23 @@ import { google } from "googleapis";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/* ----------------------------- ENV & CONSTANTS ---------------------------- */
+
+const SA_JSON = process.env.GOOGLE_SA_JSON || "";
+const SA_SUBJECT = process.env.GOOGLE_SA_IMPERSONATE || "";
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
+
+const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
+
+// Optional JSON like:
+// {"mon":[["09:00","12:00"],["14:00","18:00"]],"tue":[["09:00","17:00"]], ...,
+//  "slotMinutes":30,"stacking":true}
+const RULES_RAW = process.env.BOOKING_RULES_JSON || "";
+
+const DEFAULT_SLOT_MIN = 30;    // each slot 30 minutes
+const LEAD_MINUTES = 60;        // must be at least 1 hour from now
+const BUFFER_MINUTES = 0;       // no buffer after events
+
 type Rules = {
   mon?: [string, string][];
   tue?: [string, string][];
@@ -13,76 +30,32 @@ type Rules = {
   fri?: [string, string][];
   sat?: [string, string][];
   sun?: [string, string][];
-  slotMinutes?: number;   // default 30
-  stacking?: boolean;     // unused here but preserved
+  slotMinutes?: number;
+  stacking?: boolean;
 };
-
-type SlotOut = { start: string; end: string; label: string; busy?: boolean };
 
 const DOW = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
-/* ------------------------------ ENV --------------------------------- */
+/* --------------------------------- UTILS ---------------------------------- */
 
-const TZ = process.env.BOOKING_TZ || "America/New_York";
-const CAL_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
-const LEAD_MIN = Math.max(0, Number(process.env.BOOKING_LEAD_MIN ?? 60)); // minutes
-
-// Service Account auth (read-only for availability)
-function getCalendarClient() {
-  const raw = process.env.GOOGLE_SA_JSON;
-  const subject = process.env.GOOGLE_SA_IMPERSONATE;
-  if (!raw || !subject) {
-    throw new Error("Service Account env missing: GOOGLE_SA_JSON or GOOGLE_SA_IMPERSONATE");
+function safeParseRules(raw: string): Rules {
+  try {
+    const j = JSON.parse(raw || "{}");
+    return j ?? {};
+  } catch {
+    return {};
   }
-  const creds = JSON.parse(raw);
-  const auth = new google.auth.GoogleAuth({
-    credentials: creds,
-    scopes: [
-      "https://www.googleapis.com/auth/calendar.readonly", // list/freeBusy
-    ],
-    clientOptions: { subject },
-  });
-  return google.calendar({ version: "v3", auth });
 }
 
-/* --------------------------- TZ helpers ------------------------------ */
-
-/** offset (minutes) of `timeZone` at the given instant */
-function tzOffsetMinutes(at: Date, timeZone: string): number {
-  const fmt = (tz: string) => new Date(at.toLocaleString("en-US", { timeZone: tz }));
-  // difference between the same instant formatted into the two zones
-  return (fmt(timeZone).getTime() - fmt("UTC").getTime()) / 60000;
-}
-
-/** Convert a local wall-clock (y,m,d,h,mm) in `timeZone` to UTC ISO (with Z). */
-function localToUtcIso(
-  y: number,
-  m: number, // 1-12
-  d: number,
-  h: number,
-  mm: number,
-  timeZone: string
-): string {
-  // Start with a UTC date that has the same wall clock components.
-  const pretendUtc = new Date(Date.UTC(y, m - 1, d, h, mm, 0));
-  const offMin = tzOffsetMinutes(pretendUtc, timeZone);
-  const utcMs = pretendUtc.getTime() - offMin * 60000;
-  return new Date(utcMs).toISOString();
-}
-
-/** Make a YYYY-MM-DD string in TZ from a Date (UTC instant). */
-function ymdInTz(d: Date, tz: string) {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
+function fmtLabel(date: Date, tz: string) {
+  return date.toLocaleString("en-US", {
     timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const [y, m, day] = fmt.format(d).split("-");
-  return { y, m, d: day };
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).replace(",", "");
 }
 
-/** Weekday ("mon"..."sun") in TZ from a Date (UTC instant). */
 function weekdayInTz(d: Date, tz: string) {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" })
     .format(d)
@@ -90,94 +63,101 @@ function weekdayInTz(d: Date, tz: string) {
     .slice(0, 3) as (typeof DOW)[number];
 }
 
-/* --------------------------- Busy logic ------------------------------ */
-
-type BusyBlock = { startUtc: string; endUtc: string };
-
-function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number) {
-  return aStart < bEnd && bStart < aEnd;
-}
-
-async function getBusyBlocksForDay(calendar: ReturnType<typeof getCalendarClient>, day: Date): Promise<BusyBlock[]> {
-  // day is an instant. Build local YYYY-MM-DD for TZ, then get UTC window [00:00..24:00) in TZ
-  const { y, m, d } = ymdInTz(day, TZ);
-  const yN = Number(y), mN = Number(m), dN = Number(d);
-
-  const timeMin = localToUtcIso(yN, mN, dN, 0, 0, TZ);
-  // end: next day 00:00
-  const nextDay = new Date(Date.parse(timeMin) + 24 * 60 * 60 * 1000);
-  const timeMax = nextDay.toISOString();
-
-  const res = await calendar.events.list({
-    calendarId: CAL_ID,
-    singleEvents: true,
-    orderBy: "startTime",
-    timeMin,
-    timeMax,
-    showDeleted: false,
+/**
+ * Compute the timezone offset (in minutes) for `date` in IANA `tz`.
+ * Negative for zones west of UTC (e.g., -240 for EDT).
+ */
+function tzOffsetMinutes(tz: string, date: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
-
-  const items = res.data.items || [];
-  const blocks: BusyBlock[] = [];
-  for (const ev of items) {
-    const s = ev.start?.dateTime || ev.start?.date; // date = all-day (treat as busy)
-    const e = ev.end?.dateTime || ev.end?.date;
-    if (!s || !e) continue;
-    // Convert to ISO strings (Calendar returns RFC3339 already)
-    const startUtc = new Date(s).toISOString();
-    const endUtc = new Date(e).toISOString();
-    blocks.push({ startUtc, endUtc });
-  }
-  return blocks;
+  const parts = dtf.formatToParts(date);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value || "0");
+  const utcLike = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  // difference between the "as-UTC" timestamp and the real epoch gives offset
+  return (utcLike - date.getTime()) / 60000;
 }
 
-/* --------------------------- Handler --------------------------------- */
+/**
+ * Convert local wall-clock time (y-m-d hh:mm in tz) to a real UTC ISO string.
+ */
+function localToUtcISO(y: number, m: number, d: number, hh: number, mm: number, tz: string) {
+  // guess this local time as if it were UTC
+  const guess = new Date(Date.UTC(y, m - 1, d, hh, mm, 0));
+  const off = tzOffsetMinutes(tz, guess);
+  const utc = new Date(guess.getTime() - off * 60000);
+  return utc.toISOString();
+}
+
+function ymdInTz(d: Date, tz: string) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+  const [y, m, day] = fmt.format(d).split("-");
+  return { y: Number(y), m: Number(m), d: Number(day) };
+}
+
+function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string) {
+  return !(aEnd <= bStart || bEnd <= aStart);
+}
+
+/* ------------------------------- GOOGLE AUTH ------------------------------ */
+
+async function getCalendarAuth() {
+  if (!SA_JSON || !SA_SUBJECT) throw new Error("GOOGLE_SA_JSON / GOOGLE_SA_IMPERSONATE missing");
+  const creds = JSON.parse(SA_JSON);
+  const auth = new google.auth.JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
+    subject: SA_SUBJECT,
+  });
+  await auth.authorize();
+  return auth;
+}
+
+/* ---------------------------------- API ----------------------------------- */
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
+
+    // query params
     const days = Math.max(1, Math.min(14, Number(url.searchParams.get("days") || 7)));
     const limit = Math.max(1, Math.min(30, Number(url.searchParams.get("limit") || 8)));
+    const page = Math.max(0, Number(url.searchParams.get("page") || 0));
 
-    // (optional) start from explicit y/m/d if provided
-    const y = Number(url.searchParams.get("y") || NaN);
-    const m = Number(url.searchParams.get("m") || NaN);
-    const d = Number(url.searchParams.get("d") || NaN);
-    let startAnchor = new Date(); // now (UTC instant)
-    if (!Number.isNaN(y) && !Number.isNaN(m) && !Number.isNaN(d)) {
-      // interpret as local midnight in TZ, then convert to actual UTC instant
-      const iso = localToUtcIso(y, m, d, 0, 0, TZ);
-      startAnchor = new Date(iso);
-    }
+    // optional specific day filter (from UI day picker)
+    const y = Number(url.searchParams.get("y") || 0);
+    const m = Number(url.searchParams.get("m") || 0);
+    const d = Number(url.searchParams.get("d") || 0);
+    const pinnedDay = y && m && d ? new Date(Date.UTC(y, m - 1, d, 12, 0, 0)) : null;
 
-    // load rules
-    let rules: Rules = { slotMinutes: 30, stacking: true };
-    try {
-      rules = { ...rules, ...(JSON.parse(process.env.BOOKING_RULES_JSON || "{}") as Rules) };
-    } catch {}
+    // rules
+    const rules = { slotMinutes: DEFAULT_SLOT_MIN, stacking: true, ...safeParseRules(RULES_RAW) } as Rules;
+    const step = Math.max(5, rules.slotMinutes ?? DEFAULT_SLOT_MIN);
 
-    const step = rules.slotMinutes ?? 30;
+    // walk days and build naive candidate slots (label + UTC window)
+    const candidates: { start: string; end: string; label: string }[] = [];
+    const now = new Date();
+    const leadCutoff = new Date(now.getTime() + LEAD_MINUTES * 60000);
 
-    // Pre-calc lead-time threshold
-    const nowMs = Date.now();
-    const leadCutoffMs = nowMs + LEAD_MIN * 60000;
+    let startCursor = pinnedDay ?? now;
+    // page forward by whole days
+    if (page > 0) startCursor = new Date(startCursor.getTime() + page * 86400000);
 
-    const out: SlotOut[] = [];
-    const calendar = getCalendarClient();
-
-    // Iterate days until we fill up to `limit` slots (we still include busy slots, but mark them)
-    for (let i = 0; i < days && out.length < limit; i++) {
-      const dayInstant = new Date(startAnchor.getTime() + i * 86400000); // add i days (UTC instant)
-      const dow = weekdayInTz(dayInstant, TZ);
+    for (let i = 0; i < days && candidates.length < limit; i++) {
+      const dayDate = new Date(startCursor.getTime() + i * 86400000);
+      const dow = weekdayInTz(dayDate, BOOKING_TZ);
       const windows = (rules as any)[dow] as [string, string][] | undefined;
       if (!windows || windows.length === 0) continue;
 
-      // Fetch busy blocks for the day once
-      const busyBlocks = await getBusyBlocksForDay(calendar, dayInstant);
-      const busyRanges = busyBlocks.map((b) => [Date.parse(b.startUtc), Date.parse(b.endUtc)] as const);
-
-      const { y: yStr, m: mStr, d: dStr } = ymdInTz(dayInstant, TZ);
-      const yN = Number(yStr), mN = Number(mStr), dN = Number(dStr);
+      const { y: yy, m: mm, d: dd } = ymdInTz(dayDate, BOOKING_TZ);
 
       for (const [startHHMM, endHHMM] of windows) {
         const [sh, sm] = startHHMM.split(":").map(Number);
@@ -186,49 +166,69 @@ export async function GET(req: Request) {
         const endMins = eh * 60 + em;
 
         for (let mins = startMins; mins + step <= endMins; mins += step) {
-          const hh = Math.floor(mins / 60);
-          const mm = mins % 60;
-
-          // naive strings (legacy shape the chat expects)
-          const hhStr = String(hh).padStart(2, "0");
-          const mmStr = String(mm).padStart(2, "0");
+          const h = Math.floor(mins / 60);
+          const m = mins % 60;
           const endMinutes = mins + step;
-          const ehhStr = String(Math.floor(endMinutes / 60)).padStart(2, "0");
-          const emmStr = String(endMinutes % 60).padStart(2, "0");
+          const ehh = Math.floor(endMinutes / 60);
+          const emm = endMinutes % 60;
 
-          const startLocal = `${yStr}-${mStr}-${dStr}T${hhStr}:${mmStr}:00`;
-          const endLocal = `${yStr}-${mStr}-${dStr}T${ehhStr}:${emmStr}:00`;
+          const startUtc = localToUtcISO(yy, mm, dd, h, m, BOOKING_TZ);
+          const endUtc = localToUtcISO(yy, mm, dd, ehh, emm, BOOKING_TZ);
 
-          // compute UTC instants to check against busy + lead time
-          const startUtcIso = localToUtcIso(yN, mN, dN, hh, mm, TZ);
-          const endUtcIso = localToUtcIso(yN, mN, dN, Math.floor(endMinutes / 60), endMinutes % 60, TZ);
-          const startMs = Date.parse(startUtcIso);
-          const endMs = Date.parse(endUtcIso);
+          // lead-time cutoff
+          if (new Date(startUtc) < leadCutoff) continue;
 
-          // label (correct in TZ)
-          const label = new Intl.DateTimeFormat("en-US", {
-            timeZone: TZ,
-            weekday: "short",
-            hour: "numeric",
-            minute: "2-digit",
-          }).format(new Date(startUtcIso)).replace(",", "");
-
-          // busy if within lead-time or overlaps an event
-          const leadBlocked = startMs < leadCutoffMs;
-          const eventBlocked = busyRanges.some(([bS, bE]) => overlaps(startMs, endMs, bS, bE));
-          const busy = leadBlocked || eventBlocked;
-
-          out.push({ start: startLocal, end: endLocal, label, ...(busy ? { busy: true } : {}) });
-
-          if (out.length >= limit) break;
+          const label = fmtLabel(new Date(startUtc), BOOKING_TZ);
+          candidates.push({ start: startUtc, end: endUtc, label });
+          if (candidates.length >= limit) break;
         }
-        if (out.length >= limit) break;
+        if (candidates.length >= limit) break;
       }
     }
 
-    return NextResponse.json({ ok: true, slots: out.slice(0, limit) });
+    if (candidates.length === 0) {
+      return NextResponse.json({ ok: true, slots: [] });
+    }
+
+    // Determine a single min/max range for free-busy
+    const rangeStart = candidates.reduce((a, c) => (c.start < a ? c.start : a), candidates[0].start);
+    const rangeEnd = candidates.reduce((a, c) => (c.end > a ? c.end : a), candidates[0].end);
+
+    // fetch busy ranges once
+    const auth = await getCalendarAuth();
+    const calendar = google.calendar({ version: "v3", auth });
+
+    const fb = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: rangeStart,
+        timeMax: rangeEnd,
+        items: [{ id: CALENDAR_ID }],
+      },
+    });
+
+    const busyBlocks =
+      (fb.data.calendars &&
+        (fb.data.calendars as any)[CALENDAR_ID] &&
+        (fb.data.calendars as any)[CALENDAR_ID].busy) ||
+      [];
+
+    // apply buffer (0 by default)
+    const bufferedBusy = (busyBlocks as { start: string; end: string }[]).map((b) => ({
+      start: new Date(new Date(b.start).getTime() - BUFFER_MINUTES * 60000).toISOString(),
+      end: new Date(new Date(b.end).getTime() + BUFFER_MINUTES * 60000).toISOString(),
+    }));
+
+    // mark each candidate free/busy
+    const slots = candidates.map((s) => {
+      const isBusy = bufferedBusy.some((b) => overlaps(s.start, s.end, b.start, b.end));
+      return { ...s, free: !isBusy };
+    });
+
+    return NextResponse.json({ ok: true, slots });
   } catch (err: any) {
-    const msg = err?.message || "slots error";
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: err?.message || "slots error" },
+      { status: 500 }
+    );
   }
 }
