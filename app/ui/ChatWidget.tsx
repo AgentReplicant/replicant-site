@@ -3,31 +3,30 @@
 
 import React, { useEffect, useRef, useState } from "react";
 
+/** ---------- Types ---------- **/
 type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 
 type Slot = {
   start: string;
   end: string;
   label: string;
-  disabled?: boolean; // greyed-out / unselectable (taken, outside hours, etc.)
+  disabled?: boolean; // greyed-out / unselectable
 };
 
 type Hist = { role: "user" | "assistant"; content: string }[];
 
 type DateFilter = { y: number; m: number; d: number } | null;
 
+/** ---------- Consts ---------- **/
 const STORE_KEY = "replicant_chat_v9";
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const ET_TZ = "America/New_York";
 
-// ---------- Utility: dates ----------
-const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
-const BOOKING_LEAD_MINUTES = 60; // show no slots inside next 60 min
-const BOOKING_LEAD_MS = BOOKING_LEAD_MINUTES * 60_000;
-
+/** ---------- Small helpers ---------- **/
 function nextNDays(n = 14) {
   const out: Date[] = [];
   const now = new Date();
-  for (let i = 0; i < n; i++) out.push(new Date(now.getTime() + i * DAY_MS));
+  for (let i = 0; i < n; i++) out.push(new Date(now.getTime() + i * 86400000));
   return out;
 }
 function ymd(d: Date) {
@@ -39,52 +38,47 @@ function dayLabel(d: Date) {
 function sameYMD(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-
-// ---------- Utility: parse natural day phrases ----------
-const WEEKDAYS: Record<string, number> = {
+/** Map weekday name -> 0-6 (Sun=0) */
+const WD: Record<string, number> = {
   sunday: 0,
-  sun: 0,
   monday: 1,
-  mon: 1,
   tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sun: 0,
+  mon: 1,
   tue: 2,
   tues: 2,
-  wednesday: 3,
   wed: 3,
-  thursday: 4,
   thu: 4,
+  thur: 4,
   thurs: 4,
-  friday: 5,
   fri: 5,
-  saturday: 6,
   sat: 6,
 };
-
-function parseDayPhrase(input: string): Date | null {
-  const val = input.trim().toLowerCase();
-
-  if (/^today\b/.test(val)) return new Date();
-
-  if (/^tomorrow\b/.test(val)) return new Date(Date.now() + DAY_MS);
-
-  // e.g. "monday", "this tuesday", "on wed", "next sunday"
-  const m = /^(?:on\s+|this\s+|next\s+)?([a-z]+)(?:\s+next)?$/.exec(val);
-  if (!m) return null;
-  const wdName = m[1];
-  if (!(wdName in WEEKDAYS)) return null;
-
-  const target = WEEKDAYS[wdName];
+/** Parse simple natural day words client-side so UI never “goes blank”. */
+function parseNaturalDay(text: string): Date | null {
+  const t = text.trim().toLowerCase();
   const now = new Date();
-  const today = now.getDay();
+  if (t === "today") return now;
+  if (t === "tomorrow") return new Date(now.getTime() + 86400000);
 
-  let delta = (target - today + 7) % 7;
-  // if user typed the weekday that is *today* and didn't say "today", push to the upcoming same weekday
-  if (delta === 0 && !/^this\s+|^on\s+/.test(val)) delta = 7;
-
-  return new Date(now.getTime() + delta * DAY_MS);
+  // "next friday", "friday"
+  const m = t.match(/^(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)$/i);
+  if (m) {
+    const want = WD[m[2].toLowerCase()];
+    if (want == null) return null;
+    const base = new Date(now);
+    let daysAhead = (want - base.getDay() + 7) % 7;
+    if (daysAhead === 0 || m[1]) daysAhead += 7; // “friday” today -> next occurrence; “next friday” -> next week
+    return new Date(base.getTime() + daysAhead * 86400000);
+  }
+  return null;
 }
 
+/** ---------- Component ---------- **/
 export default function ChatWidget() {
   // UI state
   const [open, setOpen] = useState(false);
@@ -101,7 +95,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
 
-  const [date, setDate] = useState<DateFilter>(null); // null means "no filter"
+  const [date, setDate] = useState<DateFilter>(null); // null = no filter
   const [page, setPage] = useState(0);
   const [slots, setSlots] = useState<Slot[] | null>(null);
 
@@ -121,7 +115,7 @@ export default function ChatWidget() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  // Open on #chat or custom event
+  /** ---------- Open via hash or custom event ---------- **/
   useEffect(() => {
     const fromHash = () => {
       try {
@@ -140,7 +134,7 @@ export default function ChatWidget() {
     };
   }, []);
 
-  // Restore from localStorage (with safe date guard)
+  /** ---------- Restore state ---------- **/
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORE_KEY);
@@ -189,13 +183,13 @@ export default function ChatWidget() {
     }
   }, []);
 
-  // Autoscroll
+  /** ---------- Autoscroll ---------- **/
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy, slots, showDayPicker, showScheduler, isTall, selectedSlot]);
 
-  // Persist
+  /** ---------- Persist ---------- **/
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -231,7 +225,7 @@ export default function ChatWidget() {
     suggestions,
   ]);
 
-  // Helpers
+  /** ---------- Chat helpers ---------- **/
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
@@ -259,27 +253,28 @@ export default function ChatWidget() {
     setShowScheduler(false);
     setPage(0);
     setAskedDayOnce(false);
-    setDate(null); // do NOT use {}
+    setDate(null); // important: null, not {}
     setSuggestions([
       { label: "Pick a day", value: "book a call" },
       { label: "Keep explaining", value: "please keep explaining" },
+      { label: "Pricing", value: "how much is it?" },
+      { label: "Pay now", value: "pay now" },
     ]);
   }
 
+  /** ---------- Process backend result ---------- **/
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
 
+    // External deep-link (checkout, etc.)
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       resetSchedulingUI();
-      setSuggestions([
-        { label: "Pick a day", value: "book a call" },
-        { label: "Keep explaining", value: "please keep explaining" },
-      ]);
-      appendBot(data.text || "Here’s a secure checkout:");
+      appendBot(data.text || "Here’s a secure link:");
       appendBot(`👉 ${data.url}`, { link: data.url });
       return;
     }
 
+    // Slots list
     if (data?.type === "slots" && Array.isArray(data.slots)) {
       if (data.date) setDate(data.date);
       setShowScheduler(true);
@@ -292,10 +287,11 @@ export default function ChatWidget() {
         appendBot(data.text || "Pick a time that works (ET):");
         setAskedDayOnce(true);
       }
-      setSuggestions([]); // while in scheduler, hide chips
+      setSuggestions([]); // hide chips inside scheduler
       return;
     }
 
+    // Booked
     if (data?.type === "booked") {
       resetSchedulingUI();
       const when = data.when ? ` (${data.when})` : "";
@@ -304,11 +300,12 @@ export default function ChatWidget() {
       return;
     }
 
+    // Booking error (slot taken)
     if (data?.type === "error") {
-      // keep scheduler open for retry
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
       appendBot(data.text || "That time was just taken — here are the latest available times.");
+      // Refresh to current filter
       try {
         const again = await callBrain({ message: "book a call" });
         if (again?.type === "slots") {
@@ -320,6 +317,7 @@ export default function ChatWidget() {
       return;
     }
 
+    // Plain text
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
       if (!showScheduler) {
@@ -336,25 +334,12 @@ export default function ChatWidget() {
     if (data?.text) appendBot(data.text);
   }
 
-  // Sending messages / email inline
+  /** ---------- Send / Intercept natural-day ---------- **/
   async function handleSend(text?: string) {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
-    // Natural-day intercept: "today", "tomorrow", "monday", "next sunday", etc.
-    const parsed = parseDayPhrase(val);
-    if (parsed) {
-      appendUser(val);
-      // Flip into scheduler mode immediately
-      setSuggestions([]);
-      setShowScheduler(true);
-      setShowDayPicker(false);
-      await chooseDay(parsed); // chooseDay will call the brain
-      setInput("");
-      return;
-    }
-
-    // If user typed an email while inline-confirm is visible
+    // If inline confirm visible and user typed email directly
     if (selectedSlot && EMAIL_RE.test(val) && !email) {
       setBusy(true);
       appendUser(val);
@@ -371,6 +356,16 @@ export default function ChatWidget() {
       return;
     }
 
+    // Intercept day words so “today/tomorrow/friday” never shows an empty card
+    const maybeDay = parseNaturalDay(val);
+    if (maybeDay) {
+      appendUser(val);
+      setInput("");
+      await chooseDay(maybeDay, /*suppressUserEcho*/ true);
+      return;
+    }
+
+    // Regular chat
     appendUser(val);
     setInput("");
     setBusy(true);
@@ -382,6 +377,7 @@ export default function ChatWidget() {
     }
   }
 
+  /** ---------- Pick slot / Confirm ---------- **/
   async function pickSlot(slot: Slot) {
     if (busy || slot.disabled) return;
     setSelectedSlot(slot);
@@ -408,13 +404,26 @@ export default function ChatWidget() {
     }
   }
 
-  async function chooseDay(d: Date) {
-    const { y, m, d: dd } = ymd(d);
+  /** ---------- Choose day / More times ---------- **/
+  async function chooseDay(d: Date, suppressUserEcho = false) {
+    const now = new Date();
+    const isToday = sameYMD(now, d);
+    const chosen = isToday ? now : d; // (lead-time handled server-side)
+    const { y, m, d: dd } = ymd(chosen);
+
     setDate({ y, m, d: dd });
     setPage(0);
     setBusy(true);
     setSelectedSlot(null);
     setConfirmEmail(email ?? "");
+    setShowScheduler(true);
+    setShowDayPicker(false);
+
+    if (!askedDayOnce && !suppressUserEcho) {
+      appendBot("Which day works for you? (Times are shown in Eastern Time.)");
+      setAskedDayOnce(true);
+    }
+
     try {
       const data = await callBrain({ message: "book a call" });
       await handleBrainResult(data);
@@ -434,12 +443,15 @@ export default function ChatWidget() {
     }
   }
 
+  /** ---------- Day buttons ---------- **/
   const dayButtons = nextNDays(14).map((d) => (
     <button
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && sameYMD(d, new Date(date.y, date.m - 1, date.d)) ? "bg-black text-white" : ""
+        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+          ? "bg-black text-white"
+          : ""
       }`}
       disabled={busy}
       title={d.toLocaleDateString()}
@@ -448,14 +460,7 @@ export default function ChatWidget() {
     </button>
   ));
 
-  // Hide any slot that is "in the past" (inside the next 60 minutes).
-  const renderSlots: Slot[] =
-    (slots ?? []).filter((s) => {
-      const startMs = new Date(s.start).getTime();
-      const nowMs = Date.now();
-      return startMs - nowMs >= BOOKING_LEAD_MS;
-    });
-
+  /** ---------- Render ---------- **/
   return (
     <>
       {!open && (
@@ -546,7 +551,7 @@ export default function ChatWidget() {
                           Today
                         </button>
                         <button
-                          onClick={() => chooseDay(new Date(Date.now() + DAY_MS))}
+                          onClick={() => chooseDay(new Date(Date.now() + 86400000))}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                           disabled={busy}
                         >
@@ -565,6 +570,7 @@ export default function ChatWidget() {
                               weekday: "short",
                               month: "short",
                               day: "numeric",
+                              timeZone: ET_TZ,
                             })}`
                           : "Quick picks"}
                         :
@@ -572,7 +578,7 @@ export default function ChatWidget() {
                       <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
 
                       <div className="flex flex-wrap gap-2">
-                        {renderSlots.map((s) => {
+                        {(slots || []).map((s) => {
                           const isChosen = selectedSlot?.start === s.start && selectedSlot?.end === s.end;
                           const base =
                             "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
@@ -586,7 +592,7 @@ export default function ChatWidget() {
                               className={`${base} ${s.disabled ? disabledStyle : enabled} ${
                                 isChosen ? "bg-black text-white" : ""
                               }`}
-                              disabled={busy || !!(s.disabled)}
+                              disabled={busy || !!s.disabled}
                               title={s.disabled ? "Unavailable" : "Pick this time"}
                             >
                               {s.label}
@@ -689,7 +695,7 @@ export default function ChatWidget() {
                   }}
                   placeholder={
                     email
-                      ? "Type your message…"
+                      ? "Type your message… (or send your email)"
                       : "Type your message… (or send your email)"
                   }
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
