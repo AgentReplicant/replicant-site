@@ -1,401 +1,645 @@
-'use client';
+// app/ui/ChatWidget.tsx
+"use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from "react";
 
-/** ===== Types ===== */
-type Role = 'user' | 'bot';
-type Message = { id: string; role: Role; text: string };
+type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 
 type Slot = {
-  start: string;  // ISO
-  end: string;    // ISO
-  label: string;  // "Fri 5:00 PM"
-  disabled: boolean;
+  start: string;
+  end: string;
+  label: string;
+  disabled?: boolean; // greyed-out / unselectable
 };
 
-const ET_TZ = 'America/New_York';
+type Hist = { role: "user" | "assistant"; content: string }[];
 
-/** ===== ET helpers ===== */
-const toEtNow = () => new Date(new Date().toLocaleString('en-US', { timeZone: ET_TZ }));
-const startOfEtDay = (d: Date) =>
-  new Date(new Date(d.toLocaleString('en-US', { timeZone: ET_TZ })).setHours(0, 0, 0, 0));
+type DateFilter = { y: number; m: number; d: number } | null;
 
-const weekdayMap: Record<string, number> = {
-  sun: 0, sunday: 0,
-  mon: 1, monday: 1,
-  tue: 2, tues: 2, tuesday: 2,
-  wed: 3, wednesday: 3,
-  thu: 4, thurs: 4, thursday: 4,
-  fri: 5, friday: 5,
-  sat: 6, saturday: 6,
-};
+const STORE_KEY = "replicant_chat_v9";
 
-const weekdayLabel = (i: number) =>
-  ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][i];
-
-const nextEtWeekday = (dow: number) => {
-  const now = toEtNow();
-  const delta = (dow + 7 - now.getDay()) % 7;
-  const d = new Date(now);
-  d.setDate(now.getDate() + delta);
-  return d;
-};
-
-/** ===== Build /api/slots URL ===== */
-function buildSlotsUrl(opts: { date?: Date; page?: number; limit?: number }) {
-  const url = new URL('/api/slots', window.location.origin);
-  if (opts.date) {
-    const d = startOfEtDay(opts.date);
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
-    const day = d.getDate();
-    url.searchParams.set('y', String(y));
-    url.searchParams.set('m', String(m).padStart(2, '0'));
-    url.searchParams.set('d', String(day).padStart(2, '0'));
-  } else {
-    // fallback quick picks
-    url.searchParams.set('days', '1');
-  }
-  url.searchParams.set('limit', String(opts.limit ?? 6));
-  url.searchParams.set('page', String(opts.page ?? 0));
-  url.searchParams.set('tz', ET_TZ);
-  return url.toString();
+function nextNDays(n = 14) {
+  const out: Date[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) out.push(new Date(now.getTime() + i * 86400000));
+  return out;
 }
+function ymd(d: Date) {
+  return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+}
+function dayLabel(d: Date) {
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
-/** ===== Component ===== */
 export default function ChatWidget() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'bot',
-      text: 'Hey — I can answer questions, book a quick Zoom, or get you set up now.',
-    },
-  ]);
-  const [input, setInput] = useState('');
+  // UI state
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [isTall, setIsTall] = useState(false);
 
-  // Scheduler state
-  const [schedOpen, setSchedOpen] = useState(false);
-  const [schedDate, setSchedDate] = useState<Date | null>(null);
-  const [slots, setSlots] = useState<Slot[]>([]);
+  // Chat state
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [email, setEmail] = useState<string | undefined>();
+
+  // Scheduling state
+  const [showScheduler, setShowScheduler] = useState(false);
+  const [showDayPicker, setShowDayPicker] = useState(false);
+  const [askedDayOnce, setAskedDayOnce] = useState(false);
+
+  const [date, setDate] = useState<DateFilter>(null); // <— IMPORTANT: null means "no filter"
   const [page, setPage] = useState(0);
-  const [selected, setSelected] = useState<Slot | null>(null);
-  const [email, setEmail] = useState('');
+  const [slots, setSlots] = useState<Slot[] | null>(null);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // Inline confirm state
+  const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
+  const [confirmEmail, setConfirmEmail] = useState("");
 
-  /** ===== Util ===== */
-  const pushBot = useCallback((text: string) => {
-    setMessages(ms => [...ms, { id: `m${Date.now()}`, role: 'bot', text }]);
-  }, []);
-  const pushUser = useCallback((text: string) => {
-    setMessages(ms => [...ms, { id: `m${Date.now()}`, role: 'user', text }]);
-  }, []);
+  // Quick chips
+  const [suggestions, setSuggestions] = useState([
+    { label: "Pick a day", value: "book a call" },
+    { label: "Keep explaining", value: "please keep explaining" },
+    { label: "Pricing", value: "how much is it?" },
+    { label: "Pay now", value: "pay now" },
+  ]);
 
+  // Misc
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<Hist>([]);
+
+  // Open on #chat or custom event
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, schedOpen, slots, selected]);
+    const fromHash = () => {
+      try {
+        if (typeof window !== "undefined" && location.hash === "#chat") setOpen(true);
+      } catch {}
+    };
+    const onHash = () => fromHash();
+    const onOpenEvt = () => setOpen(true);
 
-  /** ===== Slots loader ===== */
-  const loadSlots = useCallback(
-    async ({ reset }: { reset: boolean }) => {
-      const currentPage = reset ? 0 : page;
-      const url = buildSlotsUrl({ date: schedDate ?? undefined, page: currentPage, limit: 6 });
-      const res = await fetch(url, { cache: 'no-store' });
-      if (!res.ok) throw new Error('Failed to load slots');
-      const data = await res.json() as { slots: Slot[] };
-      setSlots(s => (reset ? data.slots : [...s, ...data.slots]));
-      if (reset) setPage(0);
-    },
-    [schedDate, page]
-  );
+    fromHash();
+    window.addEventListener("hashchange", onHash);
+    window.addEventListener("open-chat", onOpenEvt as EventListener);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("open-chat", onOpenEvt as EventListener);
+    };
+  }, []);
 
-  /** ===== Day token handler (today / tomorrow / weekday) ===== */
-  const handleDateToken = useCallback(async (token: string) => {
-    const t = token.trim().toLowerCase();
-
-    if (t === 'today') {
-      setSchedDate(startOfEtDay(toEtNow()));
-      setSchedOpen(true);
-      setSelected(null);
-      await loadSlots({ reset: true });
-      return true;
-    }
-
-    if (t === 'tomorrow') {
-      const d = toEtNow(); d.setDate(d.getDate() + 1);
-      setSchedDate(startOfEtDay(d));
-      setSchedOpen(true);
-      setSelected(null);
-      await loadSlots({ reset: true });
-      return true;
-    }
-
-    if (weekdayMap[t] !== undefined) {
-      const d = nextEtWeekday(weekdayMap[t]);
-      setSchedDate(startOfEtDay(d));
-      setSchedOpen(true);
-      setSelected(null);
-      await loadSlots({ reset: true });
-      return true;
-    }
-
-    return false;
-  }, [loadSlots]);
-
-  /** ===== Send handler ===== */
-  const handleSend = useCallback(async () => {
-    if (!input.trim()) return;
-    const text = input.trim();
-    setInput('');
-    pushUser(text);
-
-    // If user typed a day token, open scheduler for that day
-    setBusy(true);
+  // Restore from localStorage (with safe date guard)
+  useEffect(() => {
     try {
-      const handled = await handleDateToken(text);
-      if (handled) {
-        pushBot('Pick a time that works (ET):');
-        return;
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+
+        const safeDate: DateFilter =
+          s?.date &&
+          typeof s.date.y === "number" &&
+          typeof s.date.m === "number" &&
+          typeof s.date.d === "number"
+            ? { y: s.date.y, m: s.date.m, d: s.date.d }
+            : null;
+
+        setMessages(s.messages ?? []);
+        setEmail(s.email ?? undefined);
+        setSlots(s.slots ?? null);
+        setDate(safeDate);
+        setPage(s.page ?? 0);
+        setShowScheduler(s.showScheduler ?? false);
+        setShowDayPicker(s.showDayPicker ?? false);
+        setIsTall(s.isTall ?? false);
+        setAskedDayOnce(s.askedDayOnce ?? false);
+
+        setSelectedSlot(s.selectedSlot ?? null);
+        setConfirmEmail(s.confirmEmail ?? "");
+        setSuggestions(
+          Array.isArray(s.suggestions) && s.suggestions.length > 0
+            ? s.suggestions
+            : [
+                { label: "Pick a day", value: "book a call" },
+                { label: "Keep explaining", value: "please keep explaining" },
+                { label: "Pricing", value: "how much is it?" },
+                { label: "Pay now", value: "pay now" },
+              ]
+        );
+      } else {
+        setMessages([
+          { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+        ]);
       }
-
-      // Otherwise, default behavior: open quick picks for the next available day
-      setSchedDate(null);
-      setSchedOpen(true);
-      setSelected(null);
-      await loadSlots({ reset: true });
-      pushBot('Pick a time that works (ET):');
-    } finally {
-      setBusy(false);
-    }
-  }, [input, pushUser, handleDateToken, loadSlots, pushBot]);
-
-  /** ===== Confirm booking ===== */
-  const confirm = useCallback(async () => {
-    if (!selected || !email) return;
-    setBusy(true);
-    try {
-      const res = await fetch('/api/schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          start: selected.start,
-          end: selected.end,
-          tz: ET_TZ,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data?.ok) {
-        pushBot('Could not book that slot (That time was just taken). Please pick another.');
-        // Re-open and reload the same day to show updated availability
-        await loadSlots({ reset: true });
-        setSelected(null);
-        return;
-      }
-
-      // Success: close card, clear state, and post confirmation message
-      setSchedOpen(false);
-      setSlots([]);
-      setSelected(null);
-      setEmail('');
-      pushBot(`All set! (${new Date(selected.start).toLocaleString('en-US', { timeZone: ET_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}) Meet link: ${data?.htmlLink ?? data?.meetLink ?? '(check your email)'}\nAn invite will be sent to ${email}`);
     } catch {
-      pushBot('Sorry—something went wrong. Mind trying another time?');
+      setMessages([
+        { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+      ]);
+    }
+  }, []);
+
+  // Autoscroll
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, busy, slots, showDayPicker, showScheduler, isTall, selectedSlot]);
+
+  // Persist
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({
+          messages,
+          email,
+          slots,
+          date,
+          page,
+          showScheduler,
+          showDayPicker,
+          isTall,
+          askedDayOnce,
+          selectedSlot,
+          confirmEmail,
+          suggestions,
+        })
+      );
+    } catch {}
+  }, [
+    messages,
+    email,
+    slots,
+    date,
+    page,
+    showScheduler,
+    showDayPicker,
+    isTall,
+    askedDayOnce,
+    selectedSlot,
+    confirmEmail,
+    suggestions,
+  ]);
+
+  // Helpers
+  function appendUser(text: string) {
+    setMessages((m) => [...m, { role: "user", text }]);
+    historyRef.current.push({ role: "user", content: text });
+  }
+  function appendBot(text: string, meta?: { link?: string }) {
+    setMessages((m) => [...m, { role: "bot", text, meta }]);
+    historyRef.current.push({ role: "assistant", content: text });
+  }
+
+  async function callBrain(payload: any) {
+    const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
+    });
+    return res.json();
+  }
+
+  function resetSchedulingUI() {
+    setSlots(null);
+    setSelectedSlot(null);
+    setConfirmEmail("");
+    setShowDayPicker(false);
+    setShowScheduler(false);
+    setPage(0);
+    setAskedDayOnce(false);
+    setDate(null); // ✅ do NOT use {}
+    setSuggestions([
+      { label: "Pick a day", value: "book a call" },
+      { label: "Keep explaining", value: "please keep explaining" },
+    ]);
+  }
+
+  async function handleBrainResult(data: any) {
+    if (data?.email) setEmail(data.email);
+
+    if (data?.type === "action" && data.action === "open_url" && data.url) {
+      resetSchedulingUI();
+      setSuggestions([
+        { label: "Pick a day", value: "book a call" },
+        { label: "Keep explaining", value: "please keep explaining" },
+      ]);
+      appendBot(data.text || "Here’s a secure checkout:");
+      appendBot(`👉 ${data.url}`, { link: data.url });
+      return;
+    }
+
+    if (data?.type === "slots" && Array.isArray(data.slots)) {
+      if (data.date) setDate(data.date);
+      setShowScheduler(true);
+      setShowDayPicker(false);
+      setSlots(data.slots as Slot[]);
+      setSelectedSlot(null);
+      setConfirmEmail(email ?? "");
+
+      if (!askedDayOnce) {
+        appendBot(data.text || "Pick a time that works (ET):");
+        setAskedDayOnce(true);
+      }
+      setSuggestions([]); // while in scheduler, hide chips
+      return;
+    }
+
+    if (data?.type === "booked") {
+      resetSchedulingUI();
+      const when = data.when ? ` (${data.when})` : "";
+      const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
+      appendBot(`All set!${when}${meet}`);
+      return;
+    }
+
+    if (data?.type === "error") {
+      // keep scheduler open for retry
+      setSelectedSlot(null);
+      setConfirmEmail(email ?? "");
+      appendBot(data.text || "That time was just taken — here are the latest available times.");
+      // optionally refresh slots:
+      try {
+        const again = await callBrain({ message: "book a call" });
+        if (again?.type === "slots") {
+          setShowScheduler(true);
+          setShowDayPicker(false);
+          setSlots(again.slots as Slot[]);
+        }
+      } catch {}
+      return;
+    }
+
+    if (data?.type === "text" && data.text) {
+      appendBot(data.text);
+      if (!showScheduler) {
+        setSuggestions([
+          { label: "Pick a day", value: "book a call" },
+          { label: "Keep explaining", value: "please keep explaining" },
+          { label: "Pricing", value: "how much is it?" },
+          { label: "Pay now", value: "pay now" },
+        ]);
+      }
+      return;
+    }
+
+    if (data?.text) appendBot(data.text);
+  }
+
+  // Sending messages / email inline
+  async function handleSend(text?: string) {
+    const val = (text ?? input).trim();
+    if (!val || busy) return;
+
+    // If user typed an email while inline-confirm is visible
+    if (selectedSlot && EMAIL_RE.test(val) && !email) {
+      setBusy(true);
+      appendUser(val);
+      setInput("");
+      try {
+        setEmail(val);
+        // book immediately
+        const booked = await callBrain({
+          pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: val },
+        });
+        await handleBrainResult(booked);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    appendUser(val);
+    setInput("");
+    setBusy(true);
+    try {
+      const data = await callBrain({ message: val });
+      await handleBrainResult(data);
     } finally {
       setBusy(false);
     }
-  }, [selected, email, pushBot, loadSlots]);
+  }
 
-  /** ===== UI bits ===== */
-  const dayButtons = useMemo(() => {
-    return [...Array(7)].map((_, i) => {
-      const d = nextEtWeekday(i);
-      const lbl = weekdayLabel(i);
-      const isActive =
-        schedDate && startOfEtDay(d).getTime() === startOfEtDay(schedDate).getTime();
-      return (
-        <button
-          key={i}
-          className={`px-3 py-1 rounded-full border text-sm ${
-            isActive ? 'bg-black text-white' : 'bg-white text-black'
-          }`}
-          onClick={async () => {
-            setSchedDate(startOfEtDay(d));
-            setSelected(null);
-            await loadSlots({ reset: true });
-          }}
-        >
-          {lbl}
-        </button>
-      );
-    });
-  }, [schedDate, loadSlots]);
+  async function pickSlot(slot: Slot) {
+    if (busy || slot.disabled) return;
+
+    // select slot and show inline confirm
+    setSelectedSlot(slot);
+    setConfirmEmail(email ?? "");
+  }
+
+  async function confirmSelected() {
+    if (!selectedSlot) return;
+    const chosenEmail = (confirmEmail || "").trim();
+
+    if (!EMAIL_RE.test(chosenEmail)) {
+      // nudge in-chat
+      appendBot("What’s the best email for the invite?");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const data = await callBrain({
+        pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: chosenEmail },
+      });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseDay(d: Date) {
+    const { y, m, d: dd } = ymd(d);
+    setDate({ y, m, d: dd });
+    setPage(0);
+    setBusy(true);
+    setSelectedSlot(null);
+    setConfirmEmail(email ?? "");
+    try {
+      const data = await callBrain({ message: "book a call" });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function showMoreTimes() {
+    setPage((p) => p + 1);
+    setBusy(true);
+    try {
+      const data = await callBrain({ message: "book a call" });
+      await handleBrainResult(data);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dayButtons = nextNDays(14).map((d) => (
+    <button
+      key={d.toDateString()}
+      onClick={() => chooseDay(d)}
+      className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
+        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+          ? "bg-black text-white"
+          : ""
+      }`}
+      disabled={busy}
+      title={d.toLocaleDateString()}
+    >
+      {dayLabel(d)}
+    </button>
+  ));
 
   return (
-    <div className="w-full max-w-sm mx-auto border rounded-2xl shadow-md overflow-hidden flex flex-col">
-      {/* Messages */}
-      <div ref={scrollRef} className="h-[420px] overflow-y-auto p-3 space-y-2 bg-white">
-        {messages.map(m => (
-          <div
-            key={m.id}
-            className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-5 ${
-              m.role === 'user'
-                ? 'bg-black text-white ml-auto'
-                : 'bg-gray-100 text-gray-900'
-            }`}
-          >
-            {m.text}
-          </div>
-        ))}
-
-        {/* Scheduler card */}
-        {schedOpen && (
-          <div className="border rounded-xl p-3 mt-2 bg-white">
-            <div className="flex items-center justify-between text-sm font-medium mb-1">
-              <div>Scheduling</div>
-              <div className="space-x-3">
-                <button
-                  className="underline"
-                  onClick={() => setSchedOpen(false)}
-                >
-                  Hide
-                </button>
-                <button
-                  className="underline"
-                  onClick={async () => {
-                    setSchedDate(null);
-                    setSelected(null);
-                    await loadSlots({ reset: true });
-                  }}
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            {/* Day strip */}
-            <div className="mt-1 flex flex-wrap gap-1.5">{dayButtons}</div>
-
-            {/* Slots */}
-            <div className="mt-3">
-              <div className="text-[11px] text-gray-500 mb-2">
-                All times shown in Eastern Time (ET).
-              </div>
-              {slots.length === 0 ? (
-                <div className="text-sm text-gray-500">No times to show.</div>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {slots.map((s, idx) => {
-                    const isSelected = selected?.start === s.start && selected?.end === s.end;
-                    const base =
-                      'px-3 py-1 rounded-full border text-sm transition';
-                    const enabledCls = isSelected
-                      ? 'bg-black text-white border-black'
-                      : 'bg-white text-black hover:bg-gray-50';
-                    const disabledCls = 'bg-gray-100 text-gray-400 line-through cursor-not-allowed';
-                    return (
-                      <button
-                        key={`${s.start}-${idx}`}
-                        disabled={s.disabled}
-                        aria-disabled={s.disabled}
-                        onClick={() => !s.disabled && setSelected(s)}
-                        className={`${base} ${s.disabled ? disabledCls : enabledCls}`}
-                        title={s.disabled ? 'Unavailable' : 'Available'}
-                      >
-                        {s.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Footer controls */}
-              <div className="mt-3 flex gap-2">
-                <button
-                  className="px-3 py-1 rounded-full border text-sm"
-                  onClick={async () => {
-                    setPage(p => p + 1);
-                    await loadSlots({ reset: false });
-                  }}
-                >
-                  More times →
-                </button>
-                <button
-                  className="px-3 py-1 rounded-full border text-sm"
-                  onClick={async () => {
-                    // Jump to tomorrow (relative), but keep the day strip for precise choice
-                    const d = toEtNow(); d.setDate(d.getDate() + 1);
-                    setSchedDate(startOfEtDay(d));
-                    setSelected(null);
-                    await loadSlots({ reset: true });
-                  }}
-                >
-                  ← Change day
-                </button>
-              </div>
-
-              {/* Inline confirm bar */}
-              {selected && (
-                <div className="mt-3 border-t pt-3 flex items-center gap-2 flex-wrap">
-                  <div className="text-sm">
-                    <span className="font-medium">Selected:</span>{' '}
-                    {new Date(selected.start).toLocaleString('en-US', {
-                      timeZone: ET_TZ,
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    })}
-                  </div>
-                  <button
-                    className="text-sm underline"
-                    onClick={() => setSelected(null)}
-                  >
-                    Change time
-                  </button>
-
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="Enter your email to confirm"
-                    className="ml-auto flex-1 min-w-[180px] border rounded-lg px-3 py-1 text-sm outline-none focus:ring-2 focus:ring-black/20"
-                  />
-                  <button
-                    onClick={confirm}
-                    disabled={!email || busy}
-                    className="px-3 py-1 rounded-lg text-sm bg-black text-white disabled:opacity-50"
-                  >
-                    Confirm
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Composer */}
-      <div className="border-t p-2 flex gap-2 items-center">
-        <input
-          id="replicant-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSend()}
-          className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-black/20"
-          placeholder="Type your message… (or send your email)"
-          aria-label="Message input"
-        />
+    <>
+      {!open && (
         <button
-          onClick={handleSend}
-          disabled={busy}
-          className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50"
+          onClick={() => setOpen(true)}
+          data-chat-launcher
+          className="fixed bottom-6 right-6 z-[1000] rounded-full border border-slate-300 bg-white text-slate-900 shadow-lg px-5 py-3 text-sm font-medium hover:shadow-2xl transition cursor-pointer"
+          aria-label="Open chat"
         >
-          Send
+          Chat with us
         </button>
-      </div>
-    </div>
+      )}
+
+      {open && (
+        <div
+          className="fixed bottom-6 right-6 z-[1000] w-[420px] max-w-[92vw] bg-[#F8FAFC] border border-gray-200 rounded-2xl shadow-2xl overflow-hidden"
+          style={{ height: isTall ? "80vh" : "620px" }}
+        >
+          <div className="h-full flex flex-col">
+            {/* Header */}
+            <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
+              <div className="font-semibold text-sm text-slate-900">Replicant Assistant</div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsTall((v) => !v)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Toggle height"
+                >
+                  {isTall ? "Minimize" : "Maximize"}
+                </button>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Close chat"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Messages */}
+            <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
+              {messages.map((m, i) => (
+                <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${
+                      m.role === "user"
+                        ? "bg-black text-white border-black/20"
+                        : "bg-white text-black border-gray-200"
+                    }`}
+                  >
+                    <div className="text-[13px] leading-relaxed">{m.text}</div>
+                    {m.meta?.link && (
+                      <div className="mt-1">
+                        <a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">
+                          {m.meta.link}
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {/* Scheduler */}
+              {showScheduler && (
+                <div className="mt-3 border border-gray-200 bg-white rounded-xl">
+                  <div className="flex items-center justify-between px-3 py-2 border-b">
+                    <div className="text-xs font-medium text-slate-800">Scheduling</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setShowScheduler(false)} className="text-xs underline">
+                        Hide
+                      </button>
+                      <button onClick={resetSchedulingUI} className="text-xs underline">
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+
+                  {showDayPicker && (
+                    <div className="px-3 py-2">
+                      <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => chooseDay(new Date())}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
+                          Today
+                        </button>
+                        <button
+                          onClick={() => chooseDay(new Date(Date.now() + 86400000))}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
+                          Tomorrow
+                        </button>
+                        {dayButtons}
+                      </div>
+                    </div>
+                  )}
+
+                  {slots && (
+                    <div className="px-3 py-2">
+                      <div className="text-xs text-gray-600 mb-1">
+                        {date
+                          ? `Times for ${new Date(date.y, date.m - 1, date.d).toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}`
+                          : "Quick picks"}
+                        :
+                      </div>
+                      <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(slots || []).map((s) => {
+                          const isChosen = selectedSlot?.start === s.start && selectedSlot?.end === s.end;
+                          const base =
+                            "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
+                          const enabled = "hover:bg-black hover:text-white";
+                          const disabledStyle = "opacity-50 line-through cursor-not-allowed";
+
+                          return (
+                            <button
+                              key={s.start}
+                              onClick={() => pickSlot(s)}
+                              className={`${base} ${s.disabled ? disabledStyle : enabled} ${
+                                isChosen ? "bg-black text-white" : ""
+                              }`}
+                              disabled={busy || !!s.disabled}
+                              title={s.disabled ? "Unavailable" : "Pick this time"}
+                            >
+                              {s.label}
+                            </button>
+                          );
+                        })}
+
+                        <button
+                          onClick={showMoreTimes}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
+                          More times →
+                        </button>
+                        <button
+                          onClick={() => setShowDayPicker(true)}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
+                          ← Change day
+                        </button>
+                      </div>
+
+                      {/* Inline confirm bar */}
+                      {selectedSlot && (
+                        <div className="mt-3 border-t pt-2 flex flex-col gap-2">
+                          <div className="text-[12px]">
+                            <span className="font-medium">Selected:</span> {selectedSlot.label}
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              onClick={() => setSelectedSlot(null)}
+                              className="text-xs underline"
+                              disabled={busy}
+                            >
+                              Change time
+                            </button>
+
+                            <input
+                              value={confirmEmail}
+                              onChange={(e) => setConfirmEmail(e.target.value)}
+                              placeholder="Enter your email to confirm"
+                              className="text-xs border rounded-full px-3 py-1 outline-none focus:border-black/50"
+                              disabled={busy}
+                            />
+                            <button
+                              onClick={confirmSelected}
+                              className="text-xs px-3 py-1 rounded-full border bg-black text-white disabled:opacity-50"
+                              disabled={busy || !EMAIL_RE.test((confirmEmail || "").trim())}
+                            >
+                              Confirm
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
+            </div>
+
+            {/* Input + chips */}
+            <div className="bg-white border-t p-2 shrink-0">
+              {suggestions.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {suggestions.map((s) => (
+                    <button
+                      key={s.value}
+                      onClick={async () => {
+                        if (s.value === "book a call") {
+                          setSuggestions([]);
+                          setShowScheduler(true);
+                          setShowDayPicker(true);
+                          if (!askedDayOnce) {
+                            appendBot("Which day works for you? (Times are shown in Eastern Time.)");
+                            setAskedDayOnce(true);
+                          }
+                        } else {
+                          void handleSend(s.value);
+                        }
+                      }}
+                      className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                      disabled={busy}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  id="replicant-input"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
+                  }}
+                  placeholder={email ? "Type your message… (or send your email)" : "Type your message… (or send your email)"}
+                  className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
+                  aria-label="Message input"
+                />
+                <button
+                  onClick={() => handleSend()}
+                  disabled={busy}
+                  className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+
+              <div className="text-[10px] text-gray-500 mt-2">
+                By continuing, you agree to our TOS. Conversations may be logged to improve service.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
