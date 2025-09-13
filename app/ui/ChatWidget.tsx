@@ -9,7 +9,7 @@ type Slot = {
   start: string;
   end: string;
   label: string;
-  disabled?: boolean; // greyed-out / unselectable
+  disabled?: boolean; // greyed-out / unselectable (taken, outside hours, etc.)
 };
 
 type Hist = { role: "user" | "assistant"; content: string }[];
@@ -18,10 +18,16 @@ type DateFilter = { y: number; m: number; d: number } | null;
 
 const STORE_KEY = "replicant_chat_v9";
 
+// ---------- Utility: dates ----------
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const BOOKING_LEAD_MINUTES = 60; // show no slots inside next 60 min
+const BOOKING_LEAD_MS = BOOKING_LEAD_MINUTES * 60_000;
+
 function nextNDays(n = 14) {
   const out: Date[] = [];
   const now = new Date();
-  for (let i = 0; i < n; i++) out.push(new Date(now.getTime() + i * 86400000));
+  for (let i = 0; i < n; i++) out.push(new Date(now.getTime() + i * DAY_MS));
   return out;
 }
 function ymd(d: Date) {
@@ -30,7 +36,54 @@ function ymd(d: Date) {
 function dayLabel(d: Date) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
+function sameYMD(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+// ---------- Utility: parse natural day phrases ----------
+const WEEKDAYS: Record<string, number> = {
+  sunday: 0,
+  sun: 0,
+  monday: 1,
+  mon: 1,
+  tuesday: 2,
+  tue: 2,
+  tues: 2,
+  wednesday: 3,
+  wed: 3,
+  thursday: 4,
+  thu: 4,
+  thurs: 4,
+  friday: 5,
+  fri: 5,
+  saturday: 6,
+  sat: 6,
+};
+
+function parseDayPhrase(input: string): Date | null {
+  const val = input.trim().toLowerCase();
+
+  if (/^today\b/.test(val)) return new Date();
+
+  if (/^tomorrow\b/.test(val)) return new Date(Date.now() + DAY_MS);
+
+  // e.g. "monday", "this tuesday", "on wed", "next sunday"
+  const m = /^(?:on\s+|this\s+|next\s+)?([a-z]+)(?:\s+next)?$/.exec(val);
+  if (!m) return null;
+  const wdName = m[1];
+  if (!(wdName in WEEKDAYS)) return null;
+
+  const target = WEEKDAYS[wdName];
+  const now = new Date();
+  const today = now.getDay();
+
+  let delta = (target - today + 7) % 7;
+  // if user typed the weekday that is *today* and didn't say "today", push to the upcoming same weekday
+  if (delta === 0 && !/^this\s+|^on\s+/.test(val)) delta = 7;
+
+  return new Date(now.getTime() + delta * DAY_MS);
+}
 
 export default function ChatWidget() {
   // UI state
@@ -48,7 +101,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
 
-  const [date, setDate] = useState<DateFilter>(null); // <— IMPORTANT: null means "no filter"
+  const [date, setDate] = useState<DateFilter>(null); // null means "no filter"
   const [page, setPage] = useState(0);
   const [slots, setSlots] = useState<Slot[] | null>(null);
 
@@ -206,7 +259,7 @@ export default function ChatWidget() {
     setShowScheduler(false);
     setPage(0);
     setAskedDayOnce(false);
-    setDate(null); // ✅ do NOT use {}
+    setDate(null); // do NOT use {}
     setSuggestions([
       { label: "Pick a day", value: "book a call" },
       { label: "Keep explaining", value: "please keep explaining" },
@@ -256,7 +309,6 @@ export default function ChatWidget() {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
       appendBot(data.text || "That time was just taken — here are the latest available times.");
-      // optionally refresh slots:
       try {
         const again = await callBrain({ message: "book a call" });
         if (again?.type === "slots") {
@@ -289,6 +341,19 @@ export default function ChatWidget() {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
+    // Natural-day intercept: "today", "tomorrow", "monday", "next sunday", etc.
+    const parsed = parseDayPhrase(val);
+    if (parsed) {
+      appendUser(val);
+      // Flip into scheduler mode immediately
+      setSuggestions([]);
+      setShowScheduler(true);
+      setShowDayPicker(false);
+      await chooseDay(parsed); // chooseDay will call the brain
+      setInput("");
+      return;
+    }
+
     // If user typed an email while inline-confirm is visible
     if (selectedSlot && EMAIL_RE.test(val) && !email) {
       setBusy(true);
@@ -296,7 +361,6 @@ export default function ChatWidget() {
       setInput("");
       try {
         setEmail(val);
-        // book immediately
         const booked = await callBrain({
           pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: val },
         });
@@ -320,8 +384,6 @@ export default function ChatWidget() {
 
   async function pickSlot(slot: Slot) {
     if (busy || slot.disabled) return;
-
-    // select slot and show inline confirm
     setSelectedSlot(slot);
     setConfirmEmail(email ?? "");
   }
@@ -331,7 +393,6 @@ export default function ChatWidget() {
     const chosenEmail = (confirmEmail || "").trim();
 
     if (!EMAIL_RE.test(chosenEmail)) {
-      // nudge in-chat
       appendBot("What’s the best email for the invite?");
       return;
     }
@@ -378,9 +439,7 @@ export default function ChatWidget() {
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
-          ? "bg-black text-white"
-          : ""
+        date && sameYMD(d, new Date(date.y, date.m - 1, date.d)) ? "bg-black text-white" : ""
       }`}
       disabled={busy}
       title={d.toLocaleDateString()}
@@ -388,6 +447,14 @@ export default function ChatWidget() {
       {dayLabel(d)}
     </button>
   ));
+
+  // Hide any slot that is "in the past" (inside the next 60 minutes).
+  const renderSlots: Slot[] =
+    (slots ?? []).filter((s) => {
+      const startMs = new Date(s.start).getTime();
+      const nowMs = Date.now();
+      return startMs - nowMs >= BOOKING_LEAD_MS;
+    });
 
   return (
     <>
@@ -479,7 +546,7 @@ export default function ChatWidget() {
                           Today
                         </button>
                         <button
-                          onClick={() => chooseDay(new Date(Date.now() + 86400000))}
+                          onClick={() => chooseDay(new Date(Date.now() + DAY_MS))}
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                           disabled={busy}
                         >
@@ -505,7 +572,7 @@ export default function ChatWidget() {
                       <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
 
                       <div className="flex flex-wrap gap-2">
-                        {(slots || []).map((s) => {
+                        {renderSlots.map((s) => {
                           const isChosen = selectedSlot?.start === s.start && selectedSlot?.end === s.end;
                           const base =
                             "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
@@ -519,7 +586,7 @@ export default function ChatWidget() {
                               className={`${base} ${s.disabled ? disabledStyle : enabled} ${
                                 isChosen ? "bg-black text-white" : ""
                               }`}
-                              disabled={busy || !!s.disabled}
+                              disabled={busy || !!(s.disabled)}
                               title={s.disabled ? "Unavailable" : "Pick this time"}
                             >
                               {s.label}
@@ -620,7 +687,11 @@ export default function ChatWidget() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
                   }}
-                  placeholder={email ? "Type your message… (or send your email)" : "Type your message… (or send your email)"}
+                  placeholder={
+                    email
+                      ? "Type your message…"
+                      : "Type your message… (or send your email)"
+                  }
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
                 />
