@@ -8,61 +8,82 @@ type Hist = { role: "user" | "assistant"; content: string }[];
 type Slot = { start: string; end: string; label: string };
 
 const STORE_KEY = "replicant_chat_v10";
+const PERSONA_KEY = "replicant_persona_v1";
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const PHONE_RE = /(\+?\d[\d\-\s().]{7,}\d)/; // loose but practical
+
+type Persona = "alex" | "riley" | "jordan" | "sora";
+
+const INTRO: Record<Persona, string> = {
+  alex:
+    "Hello — I’m Alex, your Replicant agent. I’m here 24/7 to help, book a quick Google Meet, or get you set up. What would be most helpful?",
+  riley:
+    "Hey there! I’m Riley with Replicant — your always-on assistant (yep, 24/7). I can answer questions, book time, or get you set up.",
+  jordan:
+    "Hi, I’m Jordan from Replicant. Let’s move fast: I can answer questions, book a call, or get you set up right away.",
+  sora:
+    "Hi! I’m Sora with Replicant. I’m available 24/7 — happy to help with questions or book a quick Google Meet.",
+};
+
+function pickPersona(): Persona {
+  const pool: Persona[] = ["alex", "riley", "jordan", "sora"];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 export default function ChatWidget() {
+  // persona (sticky per browser)
+  const [persona, setPersona] = useState<Persona>("alex");
+
+  // UI state
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [isTall, setIsTall] = useState(false);
 
+  // Chat state
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [email, setEmail] = useState<string | undefined>();
 
-  // minimal client-side memory so chat can book with “1/2/3”
-  const [candidates, setCandidates] = useState<Slot[] | null>(null);
+  // Booking helper state (text-first flow)
+  const [candidates, setCandidates] = useState<Slot[] | null>(null); // last suggested 4
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+  const [pendingMode, setPendingMode] = useState<"video" | "phone" | null>(null);
+  const [pendingPhone, setPendingPhone] = useState<string | null>(null);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  useEffect(() => {
-    const fromHash = () => {
-      try {
-        if (typeof window !== "undefined" && location.hash === "#chat") setOpen(true);
-      } catch {}
-    };
-    const onHash = () => fromHash();
-    const onOpenEvt = () => setOpen(true);
-    fromHash();
-    window.addEventListener("hashchange", onHash);
-    window.addEventListener("open-chat", onOpenEvt as EventListener);
-    return () => {
-      window.removeEventListener("hashchange", onHash);
-      window.removeEventListener("open-chat", onOpenEvt as EventListener);
-    };
-  }, []);
-
+  /** persona init + greeting */
   useEffect(() => {
     try {
+      const saved = (localStorage.getItem(PERSONA_KEY) || "") as Persona;
+      const p = saved && ["alex", "riley", "jordan", "sora"].includes(saved) ? (saved as Persona) : pickPersona();
+      if (!saved) localStorage.setItem(PERSONA_KEY, p);
+      setPersona(p);
+
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         const s = JSON.parse(raw);
         setMessages(s.messages ?? []);
         setEmail(s.email ?? undefined);
       } else {
-        setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
+        setMessages([{ role: "bot", text: INTRO[p] }]);
       }
     } catch {
-      setMessages([{ role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." }]);
+      const p = pickPersona();
+      setPersona(p);
+      setMessages([{ role: "bot", text: INTRO[p] }]);
     }
   }, []);
 
+  /** autoscroll */
   useEffect(() => {
     const el = wrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy, isTall]);
 
+  /** persist minimal state */
   useEffect(() => {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({ messages, email }));
@@ -82,34 +103,38 @@ export default function ChatWidget() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, history: historyRef.current }),
+      body: JSON.stringify({ ...payload, history: historyRef.current, persona }),
     });
     return res.json();
+  }
+
+  function resetPending() {
+    setCandidates(null);
+    setPendingIndex(null);
+    setPendingMode(null);
+    setPendingPhone(null);
   }
 
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
 
-    // link / checkout
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       appendBot(data.text || "Here’s a secure link:");
       appendBot(`👉 ${data.url}`, { link: data.url });
-      setCandidates(null);
-      setPendingIndex(null);
+      resetPending();
       return;
     }
 
     if (Array.isArray(data?.candidates) && data.candidates.length > 0) {
-      // store the current choices (for 1/2/3 flow)
       setCandidates(data.candidates as Slot[]);
     }
 
     if (data?.type === "booked") {
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
-      appendBot(`All set!${when}${meet}`);
-      setCandidates(null);
-      setPendingIndex(null);
+      const phoneLine = data.mode === "phone" && data.phone ? `\nPhone: ${data.phone}` : "";
+      appendBot(`All set!${when}${meet}${phoneLine}`);
+      resetPending();
       return;
     }
 
@@ -125,55 +150,106 @@ export default function ChatWidget() {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
-    // If user is replying with email for a pending numeric selection
-    if (pendingIndex !== null && EMAIL_RE.test(val)) {
-      setBusy(true);
-      appendUser(val);
-      setInput("");
-      try {
-        const chosen = candidates?.[pendingIndex];
-        if (chosen) {
-          setEmail(val);
-          const booked = await callBrain({ pickSlot: { start: chosen.start, end: chosen.end, email: val } });
-          await handleBrainResult(booked);
-        } else {
-          appendBot("Let’s try that again. Say “book a call” and I’ll propose new times.");
+    // --- If we’re mid-booking after picking a number ---
+    if (pendingIndex !== null) {
+      // 1) choose mode if unknown
+      if (!pendingMode) {
+        const lower = val.toLowerCase();
+        if (lower.includes("phone") || PHONE_RE.test(val)) {
+          setPendingMode("phone");
+          // If they pasted a phone immediately, store it
+          if (PHONE_RE.test(val)) setPendingPhone(val.match(PHONE_RE)![0]);
+          appendUser(val);
+          setInput("");
+          appendBot("Got it — phone. What’s the best email for the calendar invite?");
+          return;
         }
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-
-    // If user typed “1/2/3” and we have choices
-    if (/^[1-9]$/.test(val) && candidates && candidates.length > 0) {
-      const idx = Number(val) - 1;
-      if (!candidates[idx]) {
+        if (lower.includes("video") || lower.includes("meet")) {
+          setPendingMode("video");
+          appendUser(val);
+          setInput("");
+          appendBot("Great — video (Google Meet). What’s the best email for the invite?");
+          return;
+        }
+        // nudge to choose
         appendUser(val);
         setInput("");
-        appendBot("That number isn’t in the list. Try again or say “book a call”.");
+        appendBot("Would you prefer **video** (Google Meet) or **phone**?");
         return;
       }
 
-      // If we already know their email, book immediately. Otherwise, ask.
-      appendUser(val);
-      setInput("");
-      if (email) {
+      // 2) collect phone if mode=phone and missing
+      if (pendingMode === "phone" && !pendingPhone && PHONE_RE.test(val)) {
+        setPendingPhone(val.match(PHONE_RE)![0]);
+        appendUser(val);
+        setInput("");
+        appendBot("Thanks. What’s the best email for the calendar invite?");
+        return;
+      }
+      if (pendingMode === "phone" && !pendingPhone && !PHONE_RE.test(val)) {
+        appendUser(val);
+        setInput("");
+        appendBot("What number should we call? (You can paste it here.)");
+        return;
+      }
+
+      // 3) collect email and book
+      if (EMAIL_RE.test(val)) {
         setBusy(true);
+        appendUser(val);
+        setInput("");
         try {
-          const booked = await callBrain({ pickSlot: { start: candidates[idx].start, end: candidates[idx].end, email } });
+          setEmail(val);
+          const chosen = candidates?.[pendingIndex];
+          if (!chosen) {
+            appendBot("Let’s try that again — say “book a call” and I’ll propose new times.");
+            resetPending();
+            return;
+          }
+          const payload: any = {
+            pickSlot: {
+              start: chosen.start,
+              end: chosen.end,
+              email: val,
+            },
+          };
+          if (pendingMode) payload.pickSlot.mode = pendingMode;
+          if (pendingMode === "phone" && pendingPhone) payload.pickSlot.phone = pendingPhone;
+
+          const booked = await callBrain(payload);
           await handleBrainResult(booked);
         } finally {
           setBusy(false);
         }
+        return;
+      }
+
+      // If none of the above matched, nudge appropriately
+      appendUser(val);
+      setInput("");
+      if (pendingMode === "phone" && !pendingPhone) {
+        appendBot("Please share the phone number we should call.");
       } else {
-        setPendingIndex(idx);
-        appendBot("What’s the best email for the invite?");
+        appendBot("Please share the best email for the invite.");
       }
       return;
     }
 
-    // Regular chat
+    // --- Start of a booking or normal chat ---
+    // If they typed just a number and we have candidates, accept it
+    if (/^[1-9]$/.test(val) && candidates && candidates.length > 0) {
+      const idx = Number(val) - 1;
+      appendUser(val);
+      setInput("");
+      if (!candidates[idx]) {
+        appendBot("That number isn’t in the list. Try again or say “book a call”.");
+      } else {
+        setPendingIndex(idx);
+        appendBot("Would you prefer **video** (Google Meet) or **phone**?");
+      }
+      return;
+    }
+
     appendUser(val);
     setInput("");
     setBusy(true);
@@ -226,7 +302,7 @@ export default function ChatWidget() {
                   <div className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${
                     m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"
                   }`}>
-                    <div className="text-[13px] leading-relaxed">{m.text}</div>
+                    <div className="text-[13px] leading-relaxed whitespace-pre-wrap">{m.text}</div>
                     {m.meta?.link && (
                       <div className="mt-1">
                         <a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">
@@ -270,7 +346,7 @@ export default function ChatWidget() {
               </div>
 
               <div className="text-[10px] text-gray-500 mt-2">
-                By continuing, you agree to our TOS. Conversations may be logged to improve service.
+                Under ~$10/day compared to a full-time employee — and available 24/7.
               </div>
             </div>
           </div>
