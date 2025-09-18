@@ -19,16 +19,10 @@ type DateFilter = { y: number; m: number; d: number } | null;
 
 /** ---------- Consts ---------- **/
 const STORE_KEY = "replicant_chat_v9";
-const PERSONA_KEY = "replicant_persona_v1";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/; // simple, tolerant
+const NAME_RE = /\b(?:my name is|i'm|i am)\s+([a-z][a-z'’-]+(?:\s+[a-z][a-z'’-]+){0,2})\b/i;
 const ET_TZ = "America/New_York";
-
-const PERSONAS = [
-  { name: "Alex", style: "neutral" },
-  { name: "Riley", style: "friendly" },
-  { name: "Jordan", style: "direct" },
-  { name: "Sora", style: "support" },
-] as const;
 
 /** ---------- Small helpers ---------- **/
 function nextNDays(n = 14) {
@@ -46,10 +40,28 @@ function dayLabel(d: Date) {
 function sameYMD(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
+function onlyDigits(s: string) {
+  return (s || "").replace(/[^\d]/g, "");
+}
 /** Map weekday name -> 0-6 (Sun=0) */
 const WD: Record<string, number> = {
-  sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
-  sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  tues: 2,
+  wed: 3,
+  thu: 4,
+  thur: 4,
+  thurs: 4,
+  fri: 5,
+  sat: 6,
 };
 /** Parse simple natural day words client-side so UI never “goes blank”. */
 function parseNaturalDay(text: string): Date | null {
@@ -78,9 +90,6 @@ export default function ChatWidget() {
   const [busy, setBusy] = useState(false);
   const [isTall, setIsTall] = useState(false);
 
-  // Persona
-  const [persona, setPersona] = useState<(typeof PERSONAS)[number]>(PERSONAS[0]);
-
   // Chat state
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -99,35 +108,31 @@ export default function ChatWidget() {
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [confirmEmail, setConfirmEmail] = useState("");
 
-  // Quick chips (start empty; we’ll surface after a couple exchanges)
-  const [suggestions, setSuggestions] = useState<{ label: string; value: string }[]>([]);
+  // Quick chips
+  const [suggestions, setSuggestions] = useState([
+    { label: "Pick a day", value: "book a call" },
+    { label: "Keep explaining", value: "please keep explaining" },
+    { label: "Pricing", value: "how much is it?" },
+    { label: "Pay now", value: "pay now" },
+  ]);
 
   // Misc
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
 
-  /** ---------- Persona pick (random, persisted) ---------- **/
-  useEffect(() => {
+  // Per-visitor session id for optional logging/training
+  const [sid] = useState(() => {
+    const k = "replicant_sid_v1";
     try {
-      const saved = localStorage.getItem(PERSONA_KEY);
-      if (saved) {
-        const p = PERSONAS.find((x) => x.name === saved);
-        if (p) setPersona(p);
-        else {
-          const r = PERSONAS[Math.floor(Math.random() * PERSONAS.length)];
-          setPersona(r);
-          localStorage.setItem(PERSONA_KEY, r.name);
-        }
-      } else {
-        const r = PERSONAS[Math.floor(Math.random() * PERSONAS.length)];
-        setPersona(r);
-        localStorage.setItem(PERSONA_KEY, r.name);
-      }
+      const v = localStorage.getItem(k);
+      if (v) return v;
+      const rnd = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(k, rnd);
+      return rnd;
     } catch {
-      // fallback
-      setPersona(PERSONAS[Math.floor(Math.random() * PERSONAS.length)]);
+      return Math.random().toString(36).slice(2);
     }
-  }, []);
+  });
 
   /** ---------- Open via hash or custom event ---------- **/
   useEffect(() => {
@@ -175,16 +180,27 @@ export default function ChatWidget() {
 
         setSelectedSlot(s.selectedSlot ?? null);
         setConfirmEmail(s.confirmEmail ?? "");
-        setSuggestions(Array.isArray(s.suggestions) ? s.suggestions : []);
+        setSuggestions(
+          Array.isArray(s.suggestions) && s.suggestions.length > 0
+            ? s.suggestions
+            : [
+                { label: "Pick a day", value: "book a call" },
+                { label: "Keep explaining", value: "please keep explaining" },
+                { label: "Pricing", value: "how much is it?" },
+                { label: "Pay now", value: "pay now" },
+              ]
+        );
       } else {
-        // persona-aware first line; no pitch; no chips yet
-        setMessages([{ role: "bot", text: `hey — i’m ${persona.name} from Replicant. happy to help. what’s up?` }]);
+        setMessages([
+          { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+        ]);
       }
     } catch {
-      setMessages([{ role: "bot", text: `hey — i’m ${persona.name} from Replicant. happy to help. what’s up?` }]);
+      setMessages([
+        { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+      ]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [persona.name]); // run once after persona decided
+  }, []);
 
   /** ---------- Autoscroll ---------- **/
   useEffect(() => {
@@ -228,14 +244,59 @@ export default function ChatWidget() {
     suggestions,
   ]);
 
+  /** ---------- Chat/lead logging helpers ---------- **/
+  async function logMessage(role: "user" | "assistant", text: string) {
+    try {
+      await fetch("/api/chatlog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sid,
+          role,
+          message: text,
+          source: "Replicant site",
+          pageUrl: typeof window !== "undefined" ? window.location.href : "",
+        }),
+      });
+    } catch {}
+  }
+
+  async function maybeUpsertLeadFromText(text: string) {
+    try {
+      const emailMatch = (text.match(EMAIL_RE) || [])[0];
+      const phoneMatchRaw = (text.match(PHONE_RE) || [])[0];
+      const phoneDigits = onlyDigits(phoneMatchRaw || "");
+      const nameMatch = (text.match(NAME_RE) || [])[1];
+
+      if (!emailMatch && phoneDigits.length < 7 && !nameMatch) return;
+
+      await fetch("/api/lead", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: nameMatch,
+          email: emailMatch,
+          phone: phoneDigits || undefined,
+          source: "Replicant site",
+          status: "Engaged",
+        }),
+      });
+    } catch {}
+  }
+
   /** ---------- Chat helpers ---------- **/
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
+    // fire-and-forget: log + opportunistic lead upsert
+    void logMessage("user", text);
+    void maybeUpsertLeadFromText(text);
   }
   function appendBot(text: string, meta?: { link?: string }) {
     setMessages((m) => [...m, { role: "bot", text, meta }]);
     historyRef.current.push({ role: "assistant", content: text });
+    // fire-and-forget: log bot message
+    void logMessage("assistant", text);
   }
 
   async function callBrain(payload: any) {
@@ -257,8 +318,12 @@ export default function ChatWidget() {
     setPage(0);
     setAskedDayOnce(false);
     setDate(null); // important: null, not {}
-    // no default chips
-    setSuggestions([]);
+    setSuggestions([
+      { label: "Pick a day", value: "book a call" },
+      { label: "Keep explaining", value: "please keep explaining" },
+      { label: "Pricing", value: "how much is it?" },
+      { label: "Pay now", value: "pay now" },
+    ]);
   }
 
   /** ---------- Process backend result ---------- **/
@@ -268,7 +333,7 @@ export default function ChatWidget() {
     // External deep-link (checkout, etc.)
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       resetSchedulingUI();
-      appendBot(data.text || "here’s a secure link:");
+      appendBot(data.text || "Here’s a secure link:");
       appendBot(`👉 ${data.url}`, { link: data.url });
       return;
     }
@@ -283,7 +348,7 @@ export default function ChatWidget() {
       setConfirmEmail(email ?? "");
 
       if (!askedDayOnce) {
-        appendBot(data.text || "pick a time that works (ET):");
+        appendBot(data.text || "Pick a time that works (ET):");
         setAskedDayOnce(true);
       }
       setSuggestions([]); // hide chips inside scheduler
@@ -295,7 +360,7 @@ export default function ChatWidget() {
       resetSchedulingUI();
       const when = data.when ? ` (${data.when})` : "";
       const meet = data.meetLink ? `\nMeet link: ${data.meetLink}` : "";
-      appendBot(`all set!${when}${meet}`);
+      appendBot(`All set!${when}${meet}`);
       return;
     }
 
@@ -303,7 +368,7 @@ export default function ChatWidget() {
     if (data?.type === "error") {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
-      appendBot(data.text || "that time was just taken — here are the latest available times.");
+      appendBot(data.text || "That time was just taken — here are the latest available times.");
       // Refresh to current filter
       try {
         const again = await callBrain({ message: "book a call" });
@@ -319,14 +384,12 @@ export default function ChatWidget() {
     // Plain text
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
-      // surface light chips after a couple messages, only when not scheduling
-      if (!showScheduler && historyRef.current.length > 2) {
+      if (!showScheduler) {
         setSuggestions([
-          { label: "how support works", value: "support" },
-          { label: "how booking works", value: "booking" },
-          { label: "how sales works", value: "sales" },
-          { label: "see pricing", value: "pricing" },
-          { label: "talk to a real person", value: "talk to a real person" },
+          { label: "Pick a day", value: "book a call" },
+          { label: "Keep explaining", value: "please keep explaining" },
+          { label: "Pricing", value: "how much is it?" },
+          { label: "Pay now", value: "pay now" },
         ]);
       }
       return;
@@ -390,7 +453,7 @@ export default function ChatWidget() {
     const chosenEmail = (confirmEmail || "").trim();
 
     if (!EMAIL_RE.test(chosenEmail)) {
-      appendBot("what’s the best email for the invite?");
+      appendBot("What’s the best email for the invite?");
       return;
     }
 
@@ -421,7 +484,7 @@ export default function ChatWidget() {
     setShowDayPicker(false);
 
     if (!askedDayOnce && !suppressUserEcho) {
-      appendBot("which day works for you? (times shown in ET.)");
+      appendBot("Which day works for you? (Times are shown in Eastern Time.)");
       setAskedDayOnce(true);
     }
 
@@ -450,7 +513,9 @@ export default function ChatWidget() {
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString() ? "bg-black text-white" : ""
+        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+          ? "bg-black text-white"
+          : ""
       }`}
       disabled={busy}
       title={d.toLocaleDateString()}
@@ -481,7 +546,7 @@ export default function ChatWidget() {
           <div className="h-full flex flex-col">
             {/* Header */}
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
-              <div className="font-semibold text-sm text-slate-900">Replicant — {persona.name}</div>
+              <div className="font-semibold text-sm text-slate-900">Replicant Assistant</div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsTall((v) => !v)}
@@ -662,7 +727,19 @@ export default function ChatWidget() {
                   {suggestions.map((s) => (
                     <button
                       key={s.value}
-                      onClick={async () => void handleSend(s.value)}
+                      onClick={async () => {
+                        if (s.value === "book a call") {
+                          setSuggestions([]);
+                          setShowScheduler(true);
+                          setShowDayPicker(true);
+                          if (!askedDayOnce) {
+                            appendBot("Which day works for you? (Times are shown in Eastern Time.)");
+                            setAskedDayOnce(true);
+                          }
+                        } else {
+                          void handleSend(s.value);
+                        }
+                      }}
                       className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                       disabled={busy}
                     >
@@ -680,7 +757,11 @@ export default function ChatWidget() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
                   }}
-                  placeholder="Type your message…"
+                  placeholder={
+                    email
+                      ? "Type your message… (or send your email)"
+                      : "Type your message… (or send your email)"
+                  }
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
                 />
