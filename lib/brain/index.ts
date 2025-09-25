@@ -11,13 +11,25 @@ const PART_OF_DAY_WINDOWS: Record<string, [number, number]> = {
   evening: [17 * 60, 20 * 60 + 59],
 };
 
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// Simple stable hash for persona lock
+function hashString(s: string): number {
+  let h = 2166136261 >>> 0; // FNV-ish
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
 }
 
-function pickPersona(_ctx: BrainCtx): PersonaId {
-  // Rotate across all four (you’ll refine later with logging)
-  return pick(["alex", "riley", "jordan", "sora"]);
+function pickPersona(ctx: BrainCtx): PersonaId {
+  const order: PersonaId[] = ["alex", "riley", "jordan", "sora"];
+  if (ctx.sessionId) {
+    const idx = hashString(ctx.sessionId) % order.length;
+    return order[idx];
+  }
+  return pick(order);
 }
 
 function labelFromDateFilter(d?: { y: number; m: number; d: number }) {
@@ -29,9 +41,7 @@ function labelFromDateFilter(d?: { y: number; m: number; d: number }) {
       day: "numeric",
       timeZone: "America/New_York",
     });
-  } catch {
-    return "";
-  }
+  } catch { return ""; }
 }
 
 function minutesOfDayFromLabel(slot: Slot): number | null {
@@ -55,14 +65,11 @@ function filterByPartOfDay(slots: Slot[], part?: "morning" | "afternoon" | "even
 }
 
 async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
-  // Optional LLM smoothing for tone/persona
   if (!process.env.LLM_ENABLED || process.env.LLM_ENABLED === "0") return text;
   if (!process.env.OPENAI_API_KEY) return text;
-
   try {
     const { default: OpenAI } = await import("openai");
     const client: any = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
     const system = [
       `You are ${persona.toUpperCase()} — ${personas[persona].style}.`,
       "Be natural, concise, and human. Never sound robotic. No bullet lists. No numbered choices.",
@@ -70,18 +77,12 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
       "Times are Eastern Time by default.",
       "Do not fabricate availability; rely only on provided content.",
     ].join(" ");
-
     const prompt = `Rewrite the following reply in ${personas[persona].style} tone, keeping meaning intact:\n---\n${text}\n---`;
-
     const resp = await client.chat.completions.create({
       model: process.env.LLM_MODEL || "gpt-4o-mini",
       temperature: 0.5,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
+      messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
     });
-
     const out = resp?.choices?.[0]?.message?.content?.trim();
     return out || text;
   } catch {
@@ -96,15 +97,8 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (input?.pickSlot) {
     const { start, end, email } = input.pickSlot || {};
     if (!start || !end || !email) return { type: "error", text: "Missing details for booking." };
-
     try {
-      const r = await bookSlot({
-        start,
-        end,
-        email,
-        summary: "Replicant intro call",
-        description: "Booked via Replicant",
-      });
+      const r = await bookSlot({ start, end, email, summary: "Replicant intro call", description: "Booked via Replicant" });
       const text = await tone(copy.bookedOk(), ctx, persona);
       return { type: "booked", when: undefined, meetLink: r.meetLink };
     } catch {

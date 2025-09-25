@@ -2,14 +2,18 @@
 import type { DateFilter, Slot } from "./types";
 
 function baseUrl() {
-  return (
+  const explicit =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
-    "http://localhost:3000"
-  );
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  return explicit || "http://localhost:3000";
 }
 
-export async function getSlots(date: DateFilter, page = 0, limit = 12): Promise<{ slots: Slot[]; date?: DateFilter }> {
+export async function getSlots(
+  date: DateFilter,
+  page = 0,
+  limit = 12
+): Promise<{ slots: Slot[]; date?: DateFilter }> {
   const params = new URLSearchParams();
   if (date) {
     params.set("y", String(date.y));
@@ -29,7 +33,13 @@ export async function getSlots(date: DateFilter, page = 0, limit = 12): Promise<
   return { slots: (json.slots || []) as Slot[], date };
 }
 
-export async function bookSlot(args: { start: string; end: string; email: string; summary?: string; description?: string }) {
+export async function bookSlot(args: {
+  start: string;
+  end: string;
+  email: string;
+  summary?: string;
+  description?: string;
+}) {
   const res = await fetch(`${baseUrl()}/api/schedule`, {
     method: "POST",
     headers: { "content-type": "application/json" },
