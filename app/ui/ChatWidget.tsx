@@ -108,14 +108,6 @@ export default function ChatWidget() {
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [confirmEmail, setConfirmEmail] = useState("");
 
-  // Quick chips
-  const [suggestions, setSuggestions] = useState([
-    { label: "Pick a day", value: "book a call" },
-    { label: "Keep explaining", value: "please keep explaining" },
-    { label: "Pricing", value: "how much is it?" },
-    { label: "Pay now", value: "pay now" },
-  ]);
-
   // Misc
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
@@ -180,24 +172,14 @@ export default function ChatWidget() {
 
         setSelectedSlot(s.selectedSlot ?? null);
         setConfirmEmail(s.confirmEmail ?? "");
-        setSuggestions(
-          Array.isArray(s.suggestions) && s.suggestions.length > 0
-            ? s.suggestions
-            : [
-                { label: "Pick a day", value: "book a call" },
-                { label: "Keep explaining", value: "please keep explaining" },
-                { label: "Pricing", value: "how much is it?" },
-                { label: "Pay now", value: "pay now" },
-              ]
-        );
       } else {
         setMessages([
-          { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+          { role: "bot", text: "Hey — I can answer questions, book a quick call, or get you set up now." },
         ]);
       }
     } catch {
       setMessages([
-        { role: "bot", text: "Hey — I can answer questions, book a quick Zoom, or get you set up now." },
+        { role: "bot", text: "Hey — I can answer questions, book a quick call, or get you set up now." },
       ]);
     }
   }, []);
@@ -225,7 +207,6 @@ export default function ChatWidget() {
           askedDayOnce,
           selectedSlot,
           confirmEmail,
-          suggestions,
         })
       );
     } catch {}
@@ -241,7 +222,6 @@ export default function ChatWidget() {
     askedDayOnce,
     selectedSlot,
     confirmEmail,
-    suggestions,
   ]);
 
   /** ---------- Chat/lead logging helpers ---------- **/
@@ -318,12 +298,6 @@ export default function ChatWidget() {
     setPage(0);
     setAskedDayOnce(false);
     setDate(null); // important: null, not {}
-    setSuggestions([
-      { label: "Pick a day", value: "book a call" },
-      { label: "Keep explaining", value: "please keep explaining" },
-      { label: "Pricing", value: "how much is it?" },
-      { label: "Pay now", value: "pay now" },
-    ]);
   }
 
   /** ---------- Process backend result ---------- **/
@@ -351,7 +325,6 @@ export default function ChatWidget() {
         appendBot(data.text || "Pick a time that works (ET):");
         setAskedDayOnce(true);
       }
-      setSuggestions([]); // hide chips inside scheduler
       return;
     }
 
@@ -384,14 +357,6 @@ export default function ChatWidget() {
     // Plain text
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
-      if (!showScheduler) {
-        setSuggestions([
-          { label: "Pick a day", value: "book a call" },
-          { label: "Keep explaining", value: "please keep explaining" },
-          { label: "Pricing", value: "how much is it?" },
-          { label: "Pay now", value: "pay now" },
-        ]);
-      }
       return;
     }
 
@@ -644,8 +609,7 @@ export default function ChatWidget() {
                       <div className="flex flex-wrap gap-2">
                         {(slots || []).map((s) => {
                           const isChosen = selectedSlot?.start === s.start && selectedSlot?.end === s.end;
-                          const base =
-                            "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
+                          const base = "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
                           const enabled = "hover:bg-black hover:text-white";
                           const disabledStyle = "opacity-50 line-through cursor-not-allowed";
 
@@ -720,35 +684,8 @@ export default function ChatWidget() {
               {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
             </div>
 
-            {/* Input + chips */}
+            {/* Input only (no chips) */}
             <div className="bg-white border-t p-2 shrink-0">
-              {suggestions.length > 0 && (
-                <div className="mb-2 flex flex-wrap gap-2">
-                  {suggestions.map((s) => (
-                    <button
-                      key={s.value}
-                      onClick={async () => {
-                        if (s.value === "book a call") {
-                          setSuggestions([]);
-                          setShowScheduler(true);
-                          setShowDayPicker(true);
-                          if (!askedDayOnce) {
-                            appendBot("Which day works for you? (Times are shown in Eastern Time.)");
-                            setAskedDayOnce(true);
-                          }
-                        } else {
-                          void handleSend(s.value);
-                        }
-                      }}
-                      className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
-                      disabled={busy}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-
               <div className="flex gap-2">
                 <input
                   id="replicant-input"
