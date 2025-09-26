@@ -10,7 +10,7 @@ type Slot = {
   start: string;
   end: string;
   label: string;
-  disabled?: boolean; // greyed-out / unselectable
+  disabled?: boolean;
 };
 
 type Hist = { role: "user" | "assistant"; content: string }[];
@@ -20,7 +20,7 @@ type DateFilter = { y: number; m: number; d: number } | null;
 /** ---------- Consts ---------- **/
 const STORE_KEY = "replicant_chat_v9";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/; // simple, tolerant
+const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
 const NAME_RE = /\b(?:my name is|i'm|i am)\s+([a-z][a-z'’-]+(?:\s+[a-z][a-z'’-]+){0,2})\b/i;
 const ET_TZ = "America/New_York";
 
@@ -43,24 +43,22 @@ function sameYMD(a: Date, b: Date) {
 function onlyDigits(s: string) {
   return (s || "").replace(/[^\d]/g, "");
 }
-/** Map weekday name -> 0-6 (Sun=0) */
 const WD: Record<string, number> = {
   sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
   sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
 };
-/** Parse simple natural day words client-side so UI never “goes blank”. */
 function parseNaturalDay(text: string): Date | null {
   const t = text.trim().toLowerCase();
   const now = new Date();
   if (t === "today") return now;
-  if (t === "tomorrow") return new Date(now.getTime() + 86400000);
+  if (t === "tomorrow" || t === "tmrw") return new Date(now.getTime() + 86400000);
   const m = t.match(/^(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)$/i);
   if (m) {
     const want = WD[m[2].toLowerCase()];
     if (want == null) return null;
     const base = new Date(now);
     let daysAhead = (want - base.getDay() + 7) % 7;
-    if (daysAhead === 0 || m[1]) daysAhead += 7; // “friday” today -> next occurrence; “next friday” -> next week
+    if (daysAhead === 0 || m[1]) daysAhead += 7;
     return new Date(base.getTime() + daysAhead * 86400000);
   }
   return null;
@@ -83,7 +81,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
 
-  const [date, setDate] = useState<DateFilter>(null); // null = no filter
+  const [date, setDate] = useState<DateFilter>(null);
   const [page, setPage] = useState(0);
   const [slots, setSlots] = useState<Slot[] | null>(null);
 
@@ -94,8 +92,9 @@ export default function ChatWidget() {
   // Misc
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
+  const greetedRef = useRef(false);
 
-  // Per-visitor session id (stable)
+  // Per-visitor session id (used by brain for persona seeding)
   const [sid] = useState(() => {
     const k = "replicant_sid_v1";
     try {
@@ -136,7 +135,10 @@ export default function ChatWidget() {
         const s = JSON.parse(raw);
 
         const safeDate: DateFilter =
-          s?.date && typeof s.date.y === "number" && typeof s.date.m === "number" && typeof s.date.d === "number"
+          s?.date &&
+          typeof s.date.y === "number" &&
+          typeof s.date.m === "number" &&
+          typeof s.date.d === "number"
             ? { y: s.date.y, m: s.date.m, d: s.date.d }
             : null;
 
@@ -153,13 +155,30 @@ export default function ChatWidget() {
         setSelectedSlot(s.selectedSlot ?? null);
         setConfirmEmail(s.confirmEmail ?? "");
       } else {
-        // no default bot blurb; first greeting will come from brain on open
+        // no default greeting here; the brain will greet on first turn
         setMessages([]);
       }
     } catch {
       setMessages([]);
     }
   }, []);
+
+  /** ---------- First-open: fetch greeting from brain ---------- **/
+  useEffect(() => {
+    if (!open) return;
+    if (greetedRef.current) return;
+    if (messages.length > 0) return;
+    (async () => {
+      setBusy(true);
+      try {
+        const data = await callBrain({ message: "" });
+        await handleBrainResult(data);
+      } finally {
+        setBusy(false);
+        greetedRef.current = true;
+      }
+    })();
+  }, [open, messages.length]);
 
   /** ---------- Autoscroll ---------- **/
   useEffect(() => {
@@ -187,7 +206,19 @@ export default function ChatWidget() {
         })
       );
     } catch {}
-  }, [messages, email, slots, date, page, showScheduler, showDayPicker, isTall, askedDayOnce, selectedSlot, confirmEmail]);
+  }, [
+    messages,
+    email,
+    slots,
+    date,
+    page,
+    showScheduler,
+    showDayPicker,
+    isTall,
+    askedDayOnce,
+    selectedSlot,
+    confirmEmail,
+  ]);
 
   /** ---------- Chat/lead logging helpers ---------- **/
   async function logMessage(role: "user" | "assistant", text: string) {
@@ -247,7 +278,7 @@ export default function ChatWidget() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...payload, sessionId: sid, history: historyRef.current, filters }),
+      body: JSON.stringify({ sessionId: sid, ...payload, history: historyRef.current, filters }),
     });
     return res.json();
   }
@@ -260,14 +291,13 @@ export default function ChatWidget() {
     setShowScheduler(false);
     setPage(0);
     setAskedDayOnce(false);
-    setDate(null); // important: null, not {}
+    setDate(null);
   }
 
   /** ---------- Process backend result ---------- **/
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
 
-    // External deep-link (checkout, etc.)
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       resetSchedulingUI();
       appendBot(data.text || "Here’s a secure link:");
@@ -275,7 +305,6 @@ export default function ChatWidget() {
       return;
     }
 
-    // Slots list
     if (data?.type === "slots" && Array.isArray(data.slots)) {
       if (data.date) setDate(data.date);
       setShowScheduler(true);
@@ -284,14 +313,13 @@ export default function ChatWidget() {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
 
-      if (!askedDayOnce) {
-        appendBot(data.text || "Pick a time that works (ET):");
+      if (!askedDayOnce && data.text) {
+        appendBot(data.text);
         setAskedDayOnce(true);
       }
       return;
     }
 
-    // Booked
     if (data?.type === "booked") {
       resetSchedulingUI();
       const when = data.when ? ` (${data.when})` : "";
@@ -300,7 +328,6 @@ export default function ChatWidget() {
       return;
     }
 
-    // Booking error (slot taken)
     if (data?.type === "error") {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
@@ -316,7 +343,6 @@ export default function ChatWidget() {
       return;
     }
 
-    // Plain text
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
       return;
@@ -330,14 +356,15 @@ export default function ChatWidget() {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
-    // If inline confirm visible and user typed email directly
     if (selectedSlot && EMAIL_RE.test(val) && !email) {
       setBusy(true);
       appendUser(val);
       setInput("");
       try {
         setEmail(val);
-        const booked = await callBrain({ pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: val } });
+        const booked = await callBrain({
+          pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: val },
+        });
         await handleBrainResult(booked);
       } finally {
         setBusy(false);
@@ -345,16 +372,14 @@ export default function ChatWidget() {
       return;
     }
 
-    // Intercept day words so “today/tomorrow/friday” never shows an empty card
     const maybeDay = parseNaturalDay(val);
     if (maybeDay) {
       appendUser(val);
       setInput("");
-      await chooseDay(maybeDay, /*suppressUserEcho*/ true);
+      await chooseDay(maybeDay, true);
       return;
     }
 
-    // Regular chat
     appendUser(val);
     setInput("");
     setBusy(true);
@@ -384,7 +409,9 @@ export default function ChatWidget() {
 
     setBusy(true);
     try {
-      const data = await callBrain({ pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: chosenEmail } });
+      const data = await callBrain({
+        pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: chosenEmail },
+      });
       await handleBrainResult(data);
     } finally {
       setBusy(false);
@@ -395,7 +422,7 @@ export default function ChatWidget() {
   async function chooseDay(d: Date, suppressUserEcho = false) {
     const now = new Date();
     const isToday = sameYMD(now, d);
-    const chosen = isToday ? now : d; // (lead-time handled server-side)
+    const chosen = isToday ? now : d;
     const { y, m, d: dd } = ymd(chosen);
 
     setDate({ y, m, d: dd });
@@ -430,30 +457,15 @@ export default function ChatWidget() {
     }
   }
 
-  /** ---------- First-greeting on open ---------- **/
-  useEffect(() => {
-    const boot = async () => {
-      if (!open) return;
-      if (messages.length > 0) return;
-      setBusy(true);
-      try {
-        const data = await callBrain({ message: "" }); // brain will return persona greeting
-        await handleBrainResult(data);
-      } finally {
-        setBusy(false);
-      }
-    };
-    void boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
   /** ---------- Day buttons ---------- **/
   const dayButtons = nextNDays(14).map((d) => (
     <button
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString() ? "bg-black text-white" : ""
+        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+          ? "bg-black text-white"
+          : ""
       }`}
       disabled={busy}
       title={d.toLocaleDateString()}
@@ -486,10 +498,18 @@ export default function ChatWidget() {
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
               <div className="font-semibold text-sm text-slate-900">Replicant Assistant</div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setIsTall((v) => !v)} className="text-xs text-gray-500 hover:text-black" aria-label="Toggle height">
+                <button
+                  onClick={() => setIsTall((v) => !v)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Toggle height"
+                >
                   {isTall ? "Minimize" : "Maximize"}
                 </button>
-                <button onClick={() => setOpen(false)} className="text-xs text-gray-500 hover:text-black" aria-label="Close chat">
+                <button
+                  onClick={() => setOpen(false)}
+                  className="text-xs text-gray-500 hover:text-black"
+                  aria-label="Close chat"
+                >
                   ✕
                 </button>
               </div>
@@ -501,7 +521,9 @@ export default function ChatWidget() {
                 <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${
-                      m.role === "user" ? "bg-black text-white border-black/20" : "bg-white text-black border-gray-200"
+                      m.role === "user"
+                        ? "bg-black text-white border-black/20"
+                        : "bg-white text-black border-gray-200"
                     }`}
                   >
                     <div className="text-[13px] leading-relaxed">{m.text}</div>
@@ -535,10 +557,18 @@ export default function ChatWidget() {
                     <div className="px-3 py-2">
                       <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
                       <div className="flex flex-wrap gap-2">
-                        <button onClick={() => chooseDay(new Date())} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                        <button
+                          onClick={() => chooseDay(new Date())}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
                           Today
                         </button>
-                        <button onClick={() => chooseDay(new Date(Date.now() + 86400000))} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                        <button
+                          onClick={() => chooseDay(new Date(Date.now() + 86400000))}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
                           Tomorrow
                         </button>
                         {dayButtons}
@@ -550,7 +580,12 @@ export default function ChatWidget() {
                     <div className="px-3 py-2">
                       <div className="text-xs text-gray-600 mb-1">
                         {date
-                          ? `Times for ${new Date(date.y, date.m - 1, date.d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: ET_TZ })}`
+                          ? `Times for ${new Date(date.y, date.m - 1, date.d).toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                              timeZone: ET_TZ,
+                            })}`
                           : "Quick picks"}
                         :
                       </div>
@@ -562,11 +597,14 @@ export default function ChatWidget() {
                           const base = "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
                           const enabled = "hover:bg-black hover:text-white";
                           const disabledStyle = "opacity-50 line-through cursor-not-allowed";
+
                           return (
                             <button
                               key={s.start}
                               onClick={() => pickSlot(s)}
-                              className={`${base} ${s.disabled ? disabledStyle : enabled} ${isChosen ? "bg-black text-white" : ""}`}
+                              className={`${base} ${s.disabled ? disabledStyle : enabled} ${
+                                isChosen ? "bg-black text-white" : ""
+                              }`}
                               disabled={busy || !!s.disabled}
                               title={s.disabled ? "Unavailable" : "Pick this time"}
                             >
@@ -574,24 +612,37 @@ export default function ChatWidget() {
                             </button>
                           );
                         })}
-                        <button onClick={showMoreTimes} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+
+                        <button
+                          onClick={showMoreTimes}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
                           More times →
                         </button>
-                        <button onClick={() => setShowDayPicker(true)} className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition" disabled={busy}>
+                        <button
+                          onClick={() => setShowDayPicker(true)}
+                          className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
+                          disabled={busy}
+                        >
                           ← Change day
                         </button>
                       </div>
 
-                      {/* Inline confirm bar */}
                       {selectedSlot && (
                         <div className="mt-3 border-t pt-2 flex flex-col gap-2">
                           <div className="text-[12px]">
                             <span className="font-medium">Selected:</span> {selectedSlot.label}
                           </div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <button onClick={() => setSelectedSlot(null)} className="text-xs underline" disabled={busy}>
+                            <button
+                              onClick={() => setSelectedSlot(null)}
+                              className="text-xs underline"
+                              disabled={busy}
+                            >
                               Change time
                             </button>
+
                             <input
                               value={confirmEmail}
                               onChange={(e) => setConfirmEmail(e.target.value)}
@@ -599,7 +650,11 @@ export default function ChatWidget() {
                               className="text-xs border rounded-full px-3 py-1 outline-none focus:border-black/50"
                               disabled={busy}
                             />
-                            <button onClick={confirmSelected} className="text-xs px-3 py-1 rounded-full border bg-black text-white disabled:opacity-50" disabled={busy || !EMAIL_RE.test((confirmEmail || "").trim())}>
+                            <button
+                              onClick={confirmSelected}
+                              className="text-xs px-3 py-1 rounded-full border bg-black text-white disabled:opacity-50"
+                              disabled={busy || !EMAIL_RE.test((confirmEmail || "").trim())}
+                            >
                               Confirm
                             </button>
                           </div>
@@ -613,23 +668,34 @@ export default function ChatWidget() {
               {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
             </div>
 
-            {/* Input only (no chips) */}
+            {/* Input only */}
             <div className="bg-white border-t p-2 shrink-0">
               <div className="flex gap-2">
                 <input
                   id="replicant-input"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value); }}
-                  placeholder={email ? "Type your message… (or send your email)" : "Type your message… (or send your email)"}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
+                  }}
+                  placeholder={
+                    email ? "Type your message… (or send your email)" : "Type your message… (or send your email)"
+                  }
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
                 />
-                <button onClick={() => handleSend()} disabled={busy} className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50">
+                <button
+                  onClick={() => handleSend()}
+                  disabled={busy}
+                  className="bg-black text-white text-sm px-4 py-2 rounded-xl disabled:opacity-50"
+                >
                   Send
                 </button>
               </div>
-              <div className="text-[10px] text-gray-500 mt-2">By continuing, you agree to our TOS. Conversations may be logged to improve service.</div>
+
+              <div className="text-[10px] text-gray-500 mt-2">
+                By continuing, you agree to our TOS. Conversations may be logged to improve service.
+              </div>
             </div>
           </div>
         </div>

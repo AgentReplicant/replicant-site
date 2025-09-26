@@ -9,6 +9,7 @@ export type BrainCtx = {
   page?: number;
   date?: DateFilter;
   lead?: { email?: string; phone?: string; name?: string };
+  historyCount?: number; // number of prior messages in this conversation
 };
 
 export type BrainResult =

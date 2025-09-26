@@ -21,6 +21,7 @@ export async function POST(req: Request) {
         phone: body?.phone,
         name: body?.name,
       },
+      historyCount: Array.isArray(body?.history) ? body.history.length : 0,
     };
 
     const input = body?.pickSlot
