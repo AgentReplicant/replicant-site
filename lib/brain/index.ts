@@ -2,14 +2,57 @@
 import { detectIntent } from "./intents";
 import { copy, personas, PersonaId } from "./copy/en";
 import { getSlots, bookSlot, getCheckoutLink } from "./actions";
-import type { BrainCtx, BrainResult, Slot } from "./types";
+import type { BrainCtx, BrainResult, Slot, DateFilter } from "./types";
 
-// Morning/Afternoon/Evening windows (ET)
-const PART_OF_DAY_WINDOWS: Record<string, [number, number]> = {
+/** ---------- Part-of-day windows (ET) ---------- */
+const PART_OF_DAY_WINDOWS: Record<"morning" | "afternoon" | "evening", [number, number]> = {
   morning: [8 * 60, 11 * 60 + 59],
   afternoon: [12 * 60, 16 * 60 + 59],
   evening: [17 * 60, 20 * 60 + 59],
 };
+
+/** ---------- Small helpers ---------- */
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// Deterministic persona per visitor (sessionId if present)
+const personaList: PersonaId[] = ["alex", "riley", "jordan", "sora"];
+function hash(s: string) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function pickPersona(ctx: BrainCtx): PersonaId {
+  const seed = ctx.sessionId || "anon";
+  return personaList[hash(seed) % personaList.length];
+}
+
+function ymdFromDate(d: Date): { y: number; m: number; d: number } {
+  return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+}
+
+function dateFilterAddDays(df: DateFilter, days: number): DateFilter {
+  const base =
+    df && typeof df.y === "number" ? new Date(df.y, df.m - 1, df.d) : new Date();
+  const next = new Date(base.getTime() + days * 86400000);
+  return ymdFromDate(next);
+}
+
+// ACCEPT DateFilter (nullable). This fixes the TS error you saw.
+function labelFromDateFilter(d?: DateFilter): string {
+  if (!d) return "";
+  try {
+    return new Date(d.y, d.m - 1, d.d).toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone: "America/New_York",
+    });
+  } catch {
+    return "";
+  }
+}
 
 function minutesOfDayFromLabel(slot: Slot): number | null {
   const m = slot.label.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
@@ -21,6 +64,11 @@ function minutesOfDayFromLabel(slot: Slot): number | null {
   if (ampm === "am" && hh === 12) hh = 0;
   return hh * 60 + mm;
 }
+
+function enabledSlots(slots: Slot[]): Slot[] {
+  return (slots || []).filter((s) => !s.disabled);
+}
+
 function filterByPartOfDay(slots: Slot[], part?: "morning" | "afternoon" | "evening") {
   if (!part) return slots;
   const win = PART_OF_DAY_WINDOWS[part];
@@ -30,36 +78,47 @@ function filterByPartOfDay(slots: Slot[], part?: "morning" | "afternoon" | "even
   });
 }
 
-// ---- persona handling (stable per session) ----
-function hashToIndex(s: string, mod: number) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h % mod;
-}
-function pickPersona(ctx: BrainCtx): PersonaId {
-  const all: PersonaId[] = ["alex", "riley", "jordan", "sora"];
-  const seed =
-    ctx.sessionId ||
-    ctx.lead?.email ||
-    ctx.lead?.phone ||
-    `${ctx.channel}:anon`;
-  return all[hashToIndex(seed, all.length)];
+/**
+ * Scan forward up to N days for the first date that has *enabled* slots.
+ * If `part` is provided, prefer that window; fall back to any time if none found that day.
+ */
+async function scanForwardForAvailability(
+  baseDate: DateFilter,
+  part?: "morning" | "afternoon" | "evening",
+  daysHorizon = 6
+): Promise<{ date: DateFilter; slots: Slot[] }> {
+  for (let i = 0; i <= daysHorizon; i++) {
+    const df = dateFilterAddDays(baseDate, i);
+    const { slots } = await getSlots(df, 0, 24);
+    let filtered = slots;
+    if (part) {
+      filtered = filterByPartOfDay(slots, part);
+      if (enabledSlots(filtered).length === 0) {
+        // No matches in requested window; allow any time same day
+        filtered = slots;
+      }
+    }
+    const enabled = enabledSlots(filtered);
+    if (enabled.length) return { date: df, slots: enabled };
+  }
+  // Nothing found in the horizon; return last checked day’s (possibly empty) set
+  const fallback = dateFilterAddDays(baseDate, daysHorizon);
+  return { date: fallback, slots: [] };
 }
 
+/** ---------- Optional LLM tone smoothing ---------- */
 async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
   if (!process.env.LLM_ENABLED || process.env.LLM_ENABLED === "0") return text;
   if (!process.env.OPENAI_API_KEY) return text;
-
   try {
     const { default: OpenAI } = await import("openai");
     const client: any = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const system = [
       `You are ${persona.toUpperCase()} — ${personas[persona].style}.`,
-      "Be natural, concise, and human. Never sound robotic. No bullet lists or numbered choices.",
-      "Offer phone or Google Meet for calls (Zoom not available).",
-      "Times are Eastern Time by default.",
-      "Do not fabricate availability; rely only on provided content.",
+      "Be natural, concise, and human. Never sound robotic. No bullet lists. No numbered choices.",
+      "Offer phone or Google Meet for calls (Zoom not available). Times are Eastern Time by default.",
+      "Do not invent availability; rely only on provided content.",
     ].join(" ");
 
     const prompt = `Rewrite the following reply in ${personas[persona].style} tone, keeping meaning intact:\n---\n${text}\n---`;
@@ -80,14 +139,15 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
   }
 }
 
+/** ---------- Brain ---------- */
 export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResult> {
   const persona = pickPersona(ctx);
+  const intent = detectIntent(typeof input?.message === "string" ? input.message : "");
 
-  // Structured booking action from client
+  // Structured booking (client-side picked a slot)
   if (input?.pickSlot) {
     const { start, end, email } = input.pickSlot || {};
     if (!start || !end || !email) return { type: "error", text: "Missing details for booking." };
-
     try {
       const r = await bookSlot({
         start,
@@ -96,15 +156,12 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         summary: "Replicant intro call",
         description: "Booked via Replicant",
       });
-      const text = await tone(copy.bookedOk(), ctx, persona);
+      const t = await tone(copy.bookedOk(), ctx, persona);
       return { type: "booked", when: undefined, meetLink: r.meetLink };
     } catch {
       return { type: "error", text: "Couldn’t book that time — try another." };
     }
   }
-
-  const message = typeof input?.message === "string" ? input.message : "";
-  const intent = detectIntent(message);
 
   // Payment
   if (intent.kind === "pay") {
@@ -123,7 +180,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     return { type: "text", text: t };
   }
 
-  // Ask for human → offer call (phone/Meet)
+  // Human handoff → offer call
   if (intent.kind === "human") {
     const t = await tone(copy.humanOffer, ctx, persona);
     if (ctx.date) {
@@ -134,26 +191,43 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         return { type: "error", text: "Couldn’t fetch times — mind trying again?" };
       }
     }
-    return { type: "text", text: `${t} ${copy.askDay}` };
+    return { type: "text", text: t + " " + copy.askDay };
   }
 
-  // Booking / day (explicit scheduling)
+  // Capability / use-case questions (sales-first)
+  if (intent.kind === "capability") {
+    const parts = [
+      copy.capabilityBooking,
+      copy.capabilitySales,
+      copy.capabilitySupport,
+      copy.capabilityFollowup,
+    ].join(" ");
+    const t = await tone(parts, ctx, persona);
+    return { type: "text", text: t };
+  }
+
+  // Booking or day-specific request
   if (intent.kind === "book" || intent.kind === "day") {
     try {
       const { slots, date } = await getSlots(ctx.date ?? null, ctx.page ?? 0, 12);
       const filtered = intent.kind === "day" ? filterByPartOfDay(slots, intent.partOfDay) : slots;
+      const anyEnabled = enabledSlots(filtered).length > 0;
 
-      const anyEnabled = filtered.some((s) => !s.disabled);
       if (!anyEnabled) {
-        const label = (() => {
-          try {
-            if (!ctx.date) return "that day";
-            const d = new Date(ctx.date.y, ctx.date.m - 1, ctx.date.d);
-            return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/New_York" });
-          } catch { return "that day"; }
-        })();
-        const t = await tone(copy.dayFull(label), ctx, persona);
-        return { type: "text", text: t };
+        // That day (or part of day) is full — scan forward for the next available.
+        const original = labelFromDateFilter(ctx.date || undefined) || "that day";
+        const { date: nextDate, slots: nextSlots } = await scanForwardForAvailability(
+          ctx.date ?? null,
+          intent.kind === "day" ? intent.partOfDay : undefined
+        );
+
+        if (enabledSlots(nextSlots).length) {
+          const msg = await tone(copy.dayFull(original), ctx, persona);
+          return { type: "slots", text: msg, date: nextDate, slots: nextSlots };
+        } else {
+          // Nothing in horizon; fall back to gentle error
+          return { type: "error", text: "Couldn’t fetch times — mind trying again?" };
+        }
       }
 
       const t = await tone(copy.pickTime, ctx, persona);
@@ -163,16 +237,17 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     }
   }
 
-  // Fallback
-  // - First turn → persona greeting
-  // - Later turns → helpful nudge (no re-greeting)
-  if (!ctx.historyCount || ctx.historyCount === 0) {
+  // Fallback: greet once, then discovery (sales-first)
+  if (!ctx.historyCount || ctx.historyCount < 2) {
     const p = personas[persona];
-    const greet = p.greetFirstTime;
-    const t = await tone(greet[Math.floor(Math.random() * greet.length)], ctx, persona);
+    const t = await tone(pick(p.greetFirstTime), ctx, persona);
+    return { type: "text", text: t };
+  } else {
+    const t = await tone(
+      "Got it. Quick context: Replicant handles sales, booking, and support in one chat. What business are you running and which channels matter most — website, Instagram DMs, WhatsApp, or SMS?",
+      ctx,
+      persona
+    );
     return { type: "text", text: t };
   }
-
-  const t = await tone(copy.fallbackNudge, ctx, persona);
-  return { type: "text", text: t };
 }
