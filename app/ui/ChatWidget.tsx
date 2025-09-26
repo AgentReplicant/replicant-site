@@ -10,7 +10,7 @@ type Slot = {
   start: string;
   end: string;
   label: string;
-  disabled?: boolean;
+  disabled?: boolean; // greyed-out / unselectable
 };
 
 type Hist = { role: "user" | "assistant"; content: string }[];
@@ -20,7 +20,7 @@ type DateFilter = { y: number; m: number; d: number } | null;
 /** ---------- Consts ---------- **/
 const STORE_KEY = "replicant_chat_v9";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
+const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/; // simple, tolerant
 const NAME_RE = /\b(?:my name is|i'm|i am)\s+([a-z][a-z'’-]+(?:\s+[a-z][a-z'’-]+){0,2})\b/i;
 const ET_TZ = "America/New_York";
 
@@ -43,22 +43,41 @@ function sameYMD(a: Date, b: Date) {
 function onlyDigits(s: string) {
   return (s || "").replace(/[^\d]/g, "");
 }
+/** Map weekday name -> 0-6 (Sun=0) */
 const WD: Record<string, number> = {
-  sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
-  sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  tues: 2,
+  wed: 3,
+  thu: 4,
+  thur: 4,
+  thurs: 4,
+  fri: 5,
+  sat: 6,
 };
+/** Parse simple natural day words client-side so UI never “goes blank”. */
 function parseNaturalDay(text: string): Date | null {
   const t = text.trim().toLowerCase();
   const now = new Date();
   if (t === "today") return now;
-  if (t === "tomorrow" || t === "tmrw") return new Date(now.getTime() + 86400000);
+  if (t === "tomorrow") return new Date(now.getTime() + 86400000);
+
+  // "next friday", "friday"
   const m = t.match(/^(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)$/i);
   if (m) {
     const want = WD[m[2].toLowerCase()];
     if (want == null) return null;
     const base = new Date(now);
     let daysAhead = (want - base.getDay() + 7) % 7;
-    if (daysAhead === 0 || m[1]) daysAhead += 7;
+    if (daysAhead === 0 || m[1]) daysAhead += 7; // “friday” today -> next occurrence; “next friday” -> next week
     return new Date(base.getTime() + daysAhead * 86400000);
   }
   return null;
@@ -81,7 +100,7 @@ export default function ChatWidget() {
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [askedDayOnce, setAskedDayOnce] = useState(false);
 
-  const [date, setDate] = useState<DateFilter>(null);
+  const [date, setDate] = useState<DateFilter>(null); // null = no filter
   const [page, setPage] = useState(0);
   const [slots, setSlots] = useState<Slot[] | null>(null);
 
@@ -92,9 +111,8 @@ export default function ChatWidget() {
   // Misc
   const wrapRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<Hist>([]);
-  const greetedRef = useRef(false);
 
-  // Per-visitor session id (used by brain for persona seeding)
+  // Per-visitor session id for optional logging/training
   const [sid] = useState(() => {
     const k = "replicant_sid_v1";
     try {
@@ -155,30 +173,13 @@ export default function ChatWidget() {
         setSelectedSlot(s.selectedSlot ?? null);
         setConfirmEmail(s.confirmEmail ?? "");
       } else {
-        // no default greeting here; the brain will greet on first turn
+        // No default opener — we start clean.
         setMessages([]);
       }
     } catch {
       setMessages([]);
     }
   }, []);
-
-  /** ---------- First-open: fetch greeting from brain ---------- **/
-  useEffect(() => {
-    if (!open) return;
-    if (greetedRef.current) return;
-    if (messages.length > 0) return;
-    (async () => {
-      setBusy(true);
-      try {
-        const data = await callBrain({ message: "" });
-        await handleBrainResult(data);
-      } finally {
-        setBusy(false);
-        greetedRef.current = true;
-      }
-    })();
-  }, [open, messages.length]);
 
   /** ---------- Autoscroll ---------- **/
   useEffect(() => {
@@ -264,12 +265,14 @@ export default function ChatWidget() {
   function appendUser(text: string) {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
+    // fire-and-forget: log + opportunistic lead upsert
     void logMessage("user", text);
     void maybeUpsertLeadFromText(text);
   }
   function appendBot(text: string, meta?: { link?: string }) {
     setMessages((m) => [...m, { role: "bot", text, meta }]);
     historyRef.current.push({ role: "assistant", content: text });
+    // fire-and-forget: log bot message
     void logMessage("assistant", text);
   }
 
@@ -278,7 +281,7 @@ export default function ChatWidget() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: sid, ...payload, history: historyRef.current, filters }),
+      body: JSON.stringify({ ...payload, history: historyRef.current, filters }),
     });
     return res.json();
   }
@@ -291,13 +294,14 @@ export default function ChatWidget() {
     setShowScheduler(false);
     setPage(0);
     setAskedDayOnce(false);
-    setDate(null);
+    setDate(null); // important: null, not {}
   }
 
   /** ---------- Process backend result ---------- **/
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
 
+    // External deep-link (checkout, etc.)
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       resetSchedulingUI();
       appendBot(data.text || "Here’s a secure link:");
@@ -305,6 +309,7 @@ export default function ChatWidget() {
       return;
     }
 
+    // Slots list
     if (data?.type === "slots" && Array.isArray(data.slots)) {
       if (data.date) setDate(data.date);
       setShowScheduler(true);
@@ -313,13 +318,14 @@ export default function ChatWidget() {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
 
-      if (!askedDayOnce && data.text) {
-        appendBot(data.text);
+      if (!askedDayOnce) {
+        appendBot(data.text || "Pick a time that works (ET):");
         setAskedDayOnce(true);
       }
       return;
     }
 
+    // Booked
     if (data?.type === "booked") {
       resetSchedulingUI();
       const when = data.when ? ` (${data.when})` : "";
@@ -328,10 +334,12 @@ export default function ChatWidget() {
       return;
     }
 
+    // Booking error (slot taken)
     if (data?.type === "error") {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
       appendBot(data.text || "That time was just taken — here are the latest available times.");
+      // Refresh to current filter
       try {
         const again = await callBrain({ message: "book a call" });
         if (again?.type === "slots") {
@@ -343,6 +351,7 @@ export default function ChatWidget() {
       return;
     }
 
+    // Plain text
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
       return;
@@ -356,6 +365,7 @@ export default function ChatWidget() {
     const val = (text ?? input).trim();
     if (!val || busy) return;
 
+    // If inline confirm visible and user typed email directly
     if (selectedSlot && EMAIL_RE.test(val) && !email) {
       setBusy(true);
       appendUser(val);
@@ -372,14 +382,16 @@ export default function ChatWidget() {
       return;
     }
 
+    // Intercept day words so “today/tomorrow/friday” never shows an empty card
     const maybeDay = parseNaturalDay(val);
     if (maybeDay) {
       appendUser(val);
       setInput("");
-      await chooseDay(maybeDay, true);
+      await chooseDay(maybeDay, /*suppressUserEcho*/ true);
       return;
     }
 
+    // Regular chat
     appendUser(val);
     setInput("");
     setBusy(true);
@@ -422,7 +434,7 @@ export default function ChatWidget() {
   async function chooseDay(d: Date, suppressUserEcho = false) {
     const now = new Date();
     const isToday = sameYMD(now, d);
-    const chosen = isToday ? now : d;
+    const chosen = isToday ? now : d; // (lead-time handled server-side)
     const { y, m, d: dd } = ymd(chosen);
 
     setDate({ y, m, d: dd });
@@ -629,6 +641,7 @@ export default function ChatWidget() {
                         </button>
                       </div>
 
+                      {/* Inline confirm bar */}
                       {selectedSlot && (
                         <div className="mt-3 border-t pt-2 flex flex-col gap-2">
                           <div className="text-[12px]">
@@ -668,7 +681,7 @@ export default function ChatWidget() {
               {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
             </div>
 
-            {/* Input only */}
+            {/* Input only (no chips) */}
             <div className="bg-white border-t p-2 shrink-0">
               <div className="flex gap-2">
                 <input
@@ -679,7 +692,9 @@ export default function ChatWidget() {
                     if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
                   }}
                   placeholder={
-                    email ? "Type your message… (or send your email)" : "Type your message… (or send your email)"
+                    email
+                      ? "Type your message… (or send your email)"
+                      : "Type your message… (or send your email)"
                   }
                   className="flex-1 text-sm border rounded-xl px-3 py-2 outline-none focus:border-black/50 bg-white text-slate-900 placeholder:text-slate-500"
                   aria-label="Message input"
