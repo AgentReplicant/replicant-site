@@ -116,15 +116,15 @@ function getCalendarClient() {
   });
   return google.calendar({ version: "v3", auth });
 }
-function overlaps(
-  aStart: number,
-  aEnd: number,
-  bStart: number,
-  bEnd: number
-) {
+function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number) {
   return aStart < bEnd && aEnd > bStart;
 }
 
+/**
+ * Enabled-first paging over slots.
+ * - Honors `page` & `limit`
+ * - Only returns enabled (bookable) slots; keeps shape with `disabled:false`
+ */
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -141,25 +141,34 @@ export async function GET(req: Request) {
         Number(url.searchParams.get("days") || (y && m && d ? 1 : 7))
       )
     );
+
     const limit = Math.max(
       1,
       Math.min(30, Number(url.searchParams.get("limit") || 8))
     );
 
+    let page = parseInt(url.searchParams.get("page") || "0", 10);
+    if (!Number.isFinite(page) || page < 0) page = 0;
+
     const rules = readRules();
     const step = rules.slotMinutes ?? 30;
 
     const calendar = getCalendarClient();
-    const out: { start: string; end: string; label: string; disabled?: boolean }[] =
-      [];
 
     const leadCutoffMs = Date.now() + LEAD_MINUTES * 60_000;
+
+    // Start cursor from provided date (local noon to avoid DST edges) or now
     let cursor =
       y && m && d
         ? new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
         : new Date();
 
-    for (let dayIdx = 0; dayIdx < days && out.length < limit; dayIdx++) {
+    // Collect ENABLED slots only, then page/slice them
+    const enabled: { start: string; end: string; label: string }[] = [];
+    const targetEnabled = (page + 1) * limit;
+
+    for (let dayIdx = 0; dayIdx < days && enabled.length < targetEnabled; dayIdx++) {
+      // Resolve current day in requested timezone
       const wallParts = new Intl.DateTimeFormat("en-CA", {
         timeZone: tz,
         year: "numeric",
@@ -171,9 +180,10 @@ export async function GET(req: Request) {
           (acc, p) => ((acc[p.type] = p.value), acc),
           {}
         );
-      const year = Number(wallParts.year),
-        month = Number(wallParts.month),
-        day = Number(wallParts.day);
+
+      const year = Number(wallParts.year);
+      const month = Number(wallParts.month);
+      const day = Number(wallParts.day);
 
       const weekday = new Intl.DateTimeFormat("en-US", {
         timeZone: tz,
@@ -182,14 +192,14 @@ export async function GET(req: Request) {
         .format(cursor)
         .toLowerCase()
         .slice(0, 3) as "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
-      const windows = (rules as any)[weekday] as
-        | [string, string][]
-        | undefined;
+
+      const windows = (rules as any)[weekday] as [string, string][] | undefined;
       if (!windows || windows.length === 0) {
         cursor = new Date(cursor.getTime() + 86_400_000);
         continue;
       }
 
+      // Free/busy for the whole day in one shot
       const { startZ: dayStartZ, endZ: dayEndZ } = dayUtcWindowZ(
         year,
         month,
@@ -204,6 +214,7 @@ export async function GET(req: Request) {
           items: [{ id: CALENDAR_ID }],
         },
       });
+
       const busy = fb.data.calendars?.[CALENDAR_ID]?.busy || [];
       const busyRanges: Array<[number, number]> = busy.map((b: any) => [
         new Date(b.start).getTime(),
@@ -217,8 +228,9 @@ export async function GET(req: Request) {
         const endMins = eh * 60 + em;
 
         for (let mins = startMins; mins + step <= endMins; mins += step) {
-          const hh = Math.floor(mins / 60),
-            mm = mins % 60;
+          const hh = Math.floor(mins / 60);
+          const mm = mins % 60;
+
           const slotStartZ = wallToUtcZ(year, month, day, hh, mm, tz);
           const slotEndZ = wallToUtcZ(
             year,
@@ -237,28 +249,40 @@ export async function GET(req: Request) {
             overlaps(startMs, endMs, b0, b1)
           );
 
-          const label = fmtLabel(new Date(slotStartZ), tz);
-          out.push({
-            start: slotStartZ,
-            end: slotEndZ,
-            label,
-            disabled: blockedByLead || blockedByBusy,
-          });
+          if (!blockedByLead && !blockedByBusy) {
+            enabled.push({
+              start: slotStartZ,
+              end: slotEndZ,
+              label: fmtLabel(new Date(slotStartZ), tz),
+            });
 
-          if (out.length >= limit) break;
+            // Only collect up to the end of the requested page
+            if (enabled.length >= targetEnabled) break;
+          }
         }
-        if (out.length >= limit) break;
+        if (enabled.length >= targetEnabled) break;
       }
 
+      // Advance to next calendar day
       cursor = new Date(cursor.getTime() + 86_400_000);
     }
 
+    const offset = page * limit;
+    const pageSlice = enabled.slice(offset, offset + limit);
+
     console.log("[slots] returned", {
+      page,
       limit,
       leadMinutes: LEAD_MINUTES,
-      count: out.length,
+      enabledCollected: enabled.length,
+      returned: pageSlice.length,
     });
-    return NextResponse.json({ ok: true, slots: out.slice(0, limit) });
+
+    // Keep response shape consistent with existing client
+    return NextResponse.json({
+      ok: true,
+      slots: pageSlice.map((s) => ({ ...s, disabled: false })),
+    });
   } catch (err: any) {
     const msg = err?.message || "Unable to generate slots";
     console.error("[slots] error", msg);

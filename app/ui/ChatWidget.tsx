@@ -21,7 +21,8 @@ type DateFilter = { y: number; m: number; d: number } | null;
 const STORE_KEY = "replicant_chat_v9";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/; // simple, tolerant
-const NAME_RE = /\b(?:my name is|i'm|i am)\s+([a-z][a-z'’-]+(?:\s+[a-z][a-z'’-]+){0,2})\b/i;
+const NAME_RE =
+  /\b(?:my name is|i'm|i am)\s+([a-z][a-z'’-]+(?:\s+[a-z][a-z'’-]+){0,2})\b/i;
 const ET_TZ = "America/New_York";
 
 /** ---------- Small helpers ---------- **/
@@ -35,10 +36,18 @@ function ymd(d: Date) {
   return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
 }
 function dayLabel(d: Date) {
-  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 function sameYMD(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 function onlyDigits(s: string) {
   return (s || "").replace(/[^\d]/g, "");
@@ -71,7 +80,9 @@ function parseNaturalDay(text: string): Date | null {
   if (t === "tomorrow") return new Date(now.getTime() + 86400000);
 
   // "next friday", "friday"
-  const m = t.match(/^(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)$/i);
+  const m = t.match(
+    /^(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)$/i
+  );
   if (m) {
     const want = WD[m[2].toLowerCase()];
     if (want == null) return null;
@@ -118,7 +129,8 @@ export default function ChatWidget() {
     try {
       const v = localStorage.getItem(k);
       if (v) return v;
-      const rnd = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const rnd =
+        Math.random().toString(36).slice(2) + Date.now().toString(36);
       localStorage.setItem(k, rnd);
       return rnd;
     } catch {
@@ -130,7 +142,11 @@ export default function ChatWidget() {
   useEffect(() => {
     const fromHash = () => {
       try {
-        if (typeof window !== "undefined" && location.hash === "#chat") setOpen(true);
+        if (
+          typeof window !== "undefined" &&
+          location.hash === "#chat"
+        )
+          setOpen(true);
       } catch {}
     };
     const onHash = () => fromHash();
@@ -221,6 +237,31 @@ export default function ChatWidget() {
     confirmEmail,
   ]);
 
+  /** ---------- Auto-greet on open (no chips) ---------- **/
+  useEffect(() => {
+    // Fire once when the widget opens and there's no prior history
+    if (!open) return;
+    if (messages.length > 0) return;
+    if (busy) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setBusy(true);
+        const data = await callBrain({ message: "" }); // empty -> historyCount=0 -> brain greets
+        if (!cancelled) await handleBrainResult(data);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // intentionally depend only on `open` to greet once per open
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   /** ---------- Chat/lead logging helpers ---------- **/
   async function logMessage(role: "user" | "assistant", text: string) {
     try {
@@ -232,7 +273,8 @@ export default function ChatWidget() {
           role,
           message: text,
           source: "Replicant site",
-          pageUrl: typeof window !== "undefined" ? window.location.href : "",
+          pageUrl:
+            typeof window !== "undefined" ? window.location.href : "",
         }),
       });
     } catch {}
@@ -277,7 +319,10 @@ export default function ChatWidget() {
   }
 
   async function callBrain(payload: any) {
-    const filters = { date: date ? { y: date.y, m: date.m, d: date.d } : undefined, page };
+    const filters = {
+      date: date ? { y: date.y, m: date.m, d: date.d } : undefined,
+      page,
+    };
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -338,7 +383,10 @@ export default function ChatWidget() {
     if (data?.type === "error") {
       setSelectedSlot(null);
       setConfirmEmail(email ?? "");
-      appendBot(data.text || "That time was just taken — here are the latest available times.");
+      appendBot(
+        data.text ||
+          "That time was just taken — here are the latest available times."
+      );
       // Refresh to current filter
       try {
         const again = await callBrain({ message: "book a call" });
@@ -373,7 +421,11 @@ export default function ChatWidget() {
       try {
         setEmail(val);
         const booked = await callBrain({
-          pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: val },
+          pickSlot: {
+            start: selectedSlot.start,
+            end: selectedSlot.end,
+            email: val,
+          },
         });
         await handleBrainResult(booked);
       } finally {
@@ -422,7 +474,11 @@ export default function ChatWidget() {
     setBusy(true);
     try {
       const data = await callBrain({
-        pickSlot: { start: selectedSlot.start, end: selectedSlot.end, email: chosenEmail },
+        pickSlot: {
+          start: selectedSlot.start,
+          end: selectedSlot.end,
+          email: chosenEmail,
+        },
       });
       await handleBrainResult(data);
     } finally {
@@ -446,7 +502,9 @@ export default function ChatWidget() {
     setShowDayPicker(false);
 
     if (!askedDayOnce && !suppressUserEcho) {
-      appendBot("Which day works for you? (Times are shown in Eastern Time.)");
+      appendBot(
+        "Which day works for you? (Times are shown in Eastern Time.)"
+      );
       setAskedDayOnce(true);
     }
 
@@ -475,7 +533,9 @@ export default function ChatWidget() {
       key={d.toDateString()}
       onClick={() => chooseDay(d)}
       className={`text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition ${
-        date && d.toDateString() === new Date(date.y, date.m - 1, date.d).toDateString()
+        date &&
+        d.toDateString() ===
+          new Date(date.y, date.m - 1, date.d).toDateString()
           ? "bg-black text-white"
           : ""
       }`}
@@ -508,7 +568,9 @@ export default function ChatWidget() {
           <div className="h-full flex flex-col">
             {/* Header */}
             <div className="bg-white border-b px-4 py-3 flex items-center justify-between shrink-0">
-              <div className="font-semibold text-sm text-slate-900">Replicant Assistant</div>
+              <div className="font-semibold text-sm text-slate-900">
+                Replicant Assistant
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsTall((v) => !v)}
@@ -528,9 +590,17 @@ export default function ChatWidget() {
             </div>
 
             {/* Messages */}
-            <div ref={wrapRef} className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]">
+            <div
+              ref={wrapRef}
+              className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#F8FAFC]"
+            >
               {messages.map((m, i) => (
-                <div key={i} className={`w-full flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  key={i}
+                  className={`w-full flex ${
+                    m.role === "user" ? "justify-end" : "justify-start"
+                  }`}
+                >
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-2 shadow-sm border break-words ${
                       m.role === "user"
@@ -538,10 +608,17 @@ export default function ChatWidget() {
                         : "bg-white text-black border-gray-200"
                     }`}
                   >
-                    <div className="text-[13px] leading-relaxed">{m.text}</div>
+                    <div className="text-[13px] leading-relaxed">
+                      {m.text}
+                    </div>
                     {m.meta?.link && (
                       <div className="mt-1">
-                        <a className="underline break-all" href={m.meta.link} target="_blank" rel="noreferrer">
+                        <a
+                          className="underline break-all"
+                          href={m.meta.link}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           {m.meta.link}
                         </a>
                       </div>
@@ -554,12 +631,20 @@ export default function ChatWidget() {
               {showScheduler && (
                 <div className="mt-3 border border-gray-200 bg-white rounded-xl">
                   <div className="flex items-center justify-between px-3 py-2 border-b">
-                    <div className="text-xs font-medium text-slate-800">Scheduling</div>
+                    <div className="text-xs font-medium text-slate-800">
+                      Scheduling
+                    </div>
                     <div className="flex gap-2">
-                      <button onClick={() => setShowScheduler(false)} className="text-xs underline">
+                      <button
+                        onClick={() => setShowScheduler(false)}
+                        className="text-xs underline"
+                      >
                         Hide
                       </button>
-                      <button onClick={resetSchedulingUI} className="text-xs underline">
+                      <button
+                        onClick={resetSchedulingUI}
+                        className="text-xs underline"
+                      >
                         Reset
                       </button>
                     </div>
@@ -567,7 +652,9 @@ export default function ChatWidget() {
 
                   {showDayPicker && (
                     <div className="px-3 py-2">
-                      <div className="text-xs text-gray-600 mb-1">Pick a day:</div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Pick a day:
+                      </div>
                       <div className="flex flex-wrap gap-2">
                         <button
                           onClick={() => chooseDay(new Date())}
@@ -577,7 +664,9 @@ export default function ChatWidget() {
                           Today
                         </button>
                         <button
-                          onClick={() => chooseDay(new Date(Date.now() + 86400000))}
+                          onClick={() =>
+                            chooseDay(new Date(Date.now() + 86400000))
+                          }
                           className="text-xs border rounded-full px-3 py-1 hover:bg-black hover:text-white transition"
                           disabled={busy}
                         >
@@ -592,7 +681,11 @@ export default function ChatWidget() {
                     <div className="px-3 py-2">
                       <div className="text-xs text-gray-600 mb-1">
                         {date
-                          ? `Times for ${new Date(date.y, date.m - 1, date.d).toLocaleDateString("en-US", {
+                          ? `Times for ${new Date(
+                              date.y,
+                              date.m - 1,
+                              date.d
+                            ).toLocaleDateString("en-US", {
                               weekday: "short",
                               month: "short",
                               day: "numeric",
@@ -601,24 +694,33 @@ export default function ChatWidget() {
                           : "Quick picks"}
                         :
                       </div>
-                      <div className="text-[10px] text-gray-500 mb-2">All times shown in Eastern Time (ET).</div>
+                      <div className="text-[10px] text-gray-500 mb-2">
+                        All times shown in Eastern Time (ET).
+                      </div>
 
                       <div className="flex flex-wrap gap-2">
                         {(slots || []).map((s) => {
-                          const isChosen = selectedSlot?.start === s.start && selectedSlot?.end === s.end;
-                          const base = "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
-                          const enabled = "hover:bg-black hover:text-white";
-                          const disabledStyle = "opacity-50 line-through cursor-not-allowed";
+                          const isChosen =
+                            selectedSlot?.start === s.start &&
+                            selectedSlot?.end === s.end;
+                          const base =
+                            "text-xs border rounded-full px-3 py-1 transition focus:outline-none focus:ring-1";
+                          const enabled =
+                            "hover:bg-black hover:text-white";
+                          const disabledStyle =
+                            "opacity-50 line-through cursor-not-allowed";
 
                           return (
                             <button
                               key={s.start}
                               onClick={() => pickSlot(s)}
-                              className={`${base} ${s.disabled ? disabledStyle : enabled} ${
-                                isChosen ? "bg-black text-white" : ""
-                              }`}
+                              className={`${base} ${
+                                s.disabled ? disabledStyle : enabled
+                              } ${isChosen ? "bg-black text-white" : ""}`}
                               disabled={busy || !!s.disabled}
-                              title={s.disabled ? "Unavailable" : "Pick this time"}
+                              title={
+                                s.disabled ? "Unavailable" : "Pick this time"
+                              }
                             >
                               {s.label}
                             </button>
@@ -645,7 +747,8 @@ export default function ChatWidget() {
                       {selectedSlot && (
                         <div className="mt-3 border-t pt-2 flex flex-col gap-2">
                           <div className="text-[12px]">
-                            <span className="font-medium">Selected:</span> {selectedSlot.label}
+                            <span className="font-medium">Selected:</span>{" "}
+                            {selectedSlot.label}
                           </div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <button
@@ -658,7 +761,9 @@ export default function ChatWidget() {
 
                             <input
                               value={confirmEmail}
-                              onChange={(e) => setConfirmEmail(e.target.value)}
+                              onChange={(e) =>
+                                setConfirmEmail(e.target.value)
+                              }
                               placeholder="Enter your email to confirm"
                               className="text-xs border rounded-full px-3 py-1 outline-none focus:border-black/50"
                               disabled={busy}
@@ -666,7 +771,10 @@ export default function ChatWidget() {
                             <button
                               onClick={confirmSelected}
                               className="text-xs px-3 py-1 rounded-full border bg-black text-white disabled:opacity-50"
-                              disabled={busy || !EMAIL_RE.test((confirmEmail || "").trim())}
+                              disabled={
+                                busy ||
+                                !EMAIL_RE.test((confirmEmail || "").trim())
+                              }
                             >
                               Confirm
                             </button>
@@ -678,7 +786,9 @@ export default function ChatWidget() {
                 </div>
               )}
 
-              {busy && <div className="text-xs text-gray-500 px-2">Typing…</div>}
+              {busy && (
+                <div className="text-xs text-gray-500 px-2">Typing…</div>
+              )}
             </div>
 
             {/* Input only (no chips) */}
@@ -689,7 +799,8 @@ export default function ChatWidget() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleSend((e.target as HTMLInputElement).value);
+                    if (e.key === "Enter")
+                      void handleSend((e.target as HTMLInputElement).value);
                   }}
                   placeholder={
                     email
@@ -709,7 +820,8 @@ export default function ChatWidget() {
               </div>
 
               <div className="text-[10px] text-gray-500 mt-2">
-                By continuing, you agree to our TOS. Conversations may be logged to improve service.
+                By continuing, you agree to our TOS. Conversations may be
+                logged to improve service.
               </div>
             </div>
           </div>
