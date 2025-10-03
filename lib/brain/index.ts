@@ -5,26 +5,25 @@ import { getSlots, bookSlot, getCheckoutLink } from "./actions";
 import type { BrainCtx, BrainResult, Slot } from "./types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
-const PART_OF_DAY_WINDOWS: Record<"morning"|"afternoon"|"evening", [number, number]> = {
+const POD: Record<"morning"|"afternoon"|"evening", [number, number]> = {
   morning: [8 * 60, 11 * 60 + 59],
   afternoon: [12 * 60, 16 * 60 + 59],
   evening: [17 * 60, 20 * 60 + 59],
 };
 
 /* ---------- Helpers ---------- */
+const personasList: PersonaId[] = ["alex", "riley", "jordan", "sora"];
+
 function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
 
-const personaList: PersonaId[] = ["alex", "riley", "jordan", "sora"];
-
 function pickPersona(ctx: BrainCtx): PersonaId {
-  // persona per conversation (sessionId should include a per-open seed from the widget)
-  const s = (ctx.sessionId || "") + "|p2";
+  const s = (ctx.sessionId || "") + "|p3";
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return personaList[Math.abs(h) % personaList.length];
+  return personasList[Math.abs(h) % personasList.length];
 }
 
-function minutesFromLabel(slot: Slot): number | null {
+function minsFromLabel(slot: Slot): number | null {
   const m = slot.label.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
   if (!m) return null;
   let hh = parseInt(m[1], 10);
@@ -34,28 +33,19 @@ function minutesFromLabel(slot: Slot): number | null {
   if (ap === "am" && hh === 12) hh = 0;
   return hh * 60 + mm;
 }
-function filterByWindow(slots: Slot[], pod?: "morning" | "afternoon" | "evening") {
+function filterByPod(slots: Slot[], pod?: "morning" | "afternoon" | "evening") {
   if (!pod) return slots;
-  const [lo, hi] = PART_OF_DAY_WINDOWS[pod];
+  const [lo, hi] = POD[pod];
   return slots.filter((s) => {
-    const m = minutesFromLabel(s);
+    const m = minsFromLabel(s);
     return m != null && m >= lo && m <= hi;
   });
 }
-function ymdFromIso(iso: string) {
-  const d = new Date(iso);
-  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d2: d.getUTCDate() };
-}
-function sameYMD(a: {y:number;m:number;d2:number}, b:{y:number;m:number;d2:number}) {
-  return a.y === b.y && a.m === b.m && a.d2 === b.d2;
-}
-function dayWordFromIso(iso: string, tz = "America/New_York") {
+function dayWord(iso: string, tz = "America/New_York") {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso));
 }
-
-function phraseForSlots(slots: Slot[]): string {
+function phraseForSlots(slots: Slot[], capPerDay = 3): string {
   if (!slots.length) return "I’m not seeing anything there.";
-  // Group by day word and speak 2–3 times max
   const byDay = new Map<string, string[]>();
   for (const s of slots) {
     const day = s.label.split(" ")[0]; // "Thu"
@@ -66,7 +56,7 @@ function phraseForSlots(slots: Slot[]): string {
   }
   const parts: string[] = [];
   for (const [day, times] of byDay) {
-    const short = times.slice(0, 3); // cap to 3 per day
+    const short = times.slice(0, capPerDay);
     if (short.length === 1) parts.push(`${day} ${short[0]}`);
     else if (short.length === 2) parts.push(`${day} ${short[0]} or ${short[1]}`);
     else parts.push(`${day} ${short[0]}, ${short[1]}, or ${short[2]}`);
@@ -84,16 +74,16 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
     const client: any = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const system = [
       `You are ${persona.toUpperCase()} — ${personas[persona].style}.`,
-      "Be casual-professional and concise. No menus, no repetition. Keep it to ~2 short sentences unless asked to expand.",
-      "Offer phone by default; Google Meet only if they ask. Times are Eastern Time.",
-      "Do not invent availability; rely only on provided content."
+      "Casual-professional and concise. 1–2 short sentences unless asked to expand.",
+      "Default to phone; use Google Meet only if the user asks. Times are Eastern Time.",
+      "Never invent availability; rely on provided slot data.",
     ].join(" ");
     const resp = await client.chat.completions.create({
       model: process.env.LLM_MODEL || "gpt-4o-mini",
       temperature: 0.5,
       messages: [
         { role: "system", content: system },
-        { role: "user", content: `Rewrite this naturally in your style:\n---\n${text}\n---` },
+        { role: "user", content: `Rewrite naturally in your style:\n---\n${text}\n---` },
       ],
     });
     return resp?.choices?.[0]?.message?.content?.trim() || text;
@@ -129,7 +119,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     }
   }
 
-  /* Checkout */
+  /* Checkout / Pricing */
   if (kind === "pay") {
     try {
       const { url } = getCheckoutLink();
@@ -139,27 +129,24 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
       return { type: "error", text: "Checkout isn’t available yet." };
     }
   }
-
-  /* Pricing */
   if (kind === "pricing") {
     const t = await tone(`${copy.pricingNudge} ${copy.valueCompare}`, ctx, persona);
     return { type: "text", text: t };
   }
 
-  /* Human */
+  /* Human intent → go straight to scheduling ask (no loop) */
   if (kind === "human") {
-    const t = await tone("Happy to help live. Want a quick phone call, or would you prefer Google Meet?", ctx, persona);
+    const t = await tone("Great—let’s set it up. What day works, or do you prefer morning, afternoon, or evening? (ET.)", ctx, persona);
     return { type: "text", text: t };
   }
 
-  /* Capabilities → keep it focused */
+  /* Capabilities — short & non-repetitive */
   if (kind === "capability") {
-    // Short, targeted pitch. Expand only on request.
-    const t = await tone(
-      "We specialize in booking agents, customer support agents, and sales agents. If you’re after appointments and FAQs, our booking + support combo handles intake, availability, and answers in your voice.",
-      ctx,
-      persona
-    );
+    const early = (ctx.historyCount || 0) < 6; // rough dedupe: first time early in convo
+    const text = early
+      ? "We specialize in booking agents, customer support agents, and sales agents. For appointments + FAQs, our booking + support combo handles intake, live availability, and answers in your voice—you can edit the wording anytime."
+      : "Yep—our booking + support agents handle that. Want me to help you set it up?";
+    const t = await tone(text, ctx, persona);
     return { type: "text", text: t };
   }
 
@@ -167,24 +154,22 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "book" || kind === "day") {
     const pod = (intent as any)?.partOfDay as "morning" | "afternoon" | "evening" | undefined;
 
-    // 1) If they haven’t given day or time-of-day yet → ask for it (with ET note)
+    // Ask for day or window first (ET note shown here)
     if (!ctx.date && !pod) {
-      const t = await tone("What day works — or morning, afternoon, or evening? (Times are in Eastern Time.)", ctx, persona);
+      const t = await tone("What day works for you, or morning/afternoon/evening? (Times are in Eastern Time.)", ctx, persona);
       return { type: "text", text: t };
     }
 
-    // Helper: fetch a larger set when we need to search across days
-    async function getLarge(date: any | null) {
-      const { slots } = await getSlots(date ?? null, 0, 40);
+    async function getEnabled(date: any | null, limit = 40) {
+      const { slots } = await getSlots(date ?? null, 0, limit);
       return (slots as Slot[]).filter((s) => !s.disabled);
     }
 
     try {
-      // 2) If a day is set and they also implied a window (e.g., “Fri 10am” => morning),
-      //    first try that day+window; if empty, propose: earliest window day vs first opening on that day.
+      // If day + window (e.g., “Fri 10am/morning”) → try that day/window first
       if (ctx.date && pod) {
-        const dayEnabled = (await getLarge(ctx.date)) as Slot[];
-        const dayWin = filterByWindow(dayEnabled, pod);
+        const dayEnabled = await getEnabled(ctx.date);
+        const dayWin = filterByPod(dayEnabled, pod);
 
         if (dayWin.length > 0) {
           const phrase = phraseForSlots(dayWin.slice(0, 3));
@@ -192,42 +177,37 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
           return { type: "slots", text: t, date: ctx.date, slots: dayWin };
         }
 
-        // No window on that day → find earliest window across next days
-        const cross = await getLarge(null);
-        const crossWin = filterByWindow(cross, pod);
-        let earliestWin: Slot | undefined = crossWin[0];
-
-        // Also find the first opening on the requested day (any window)
+        // No morning on that day → propose: next morning vs first opening on that day
+        const cross = await getEnabled(null);
+        const crossWin = filterByPod(cross, pod);
+        const earliestWin = crossWin[0];
         const firstOnDay = dayEnabled[0];
 
         if (earliestWin && firstOnDay) {
-          const nextDayWord = dayWordFromIso(earliestWin.start);
-          const nextTimes = phraseForSlots([earliestWin]);
-          const requestedDayWord = dayWordFromIso(firstOnDay.start); // same day
-          const firstOnDayTime = firstOnDay.label.replace(/^... /, "");
-          const line = `Next available ${pod} is ${nextDayWord.toLowerCase()} ${nextTimes.replace(/^I can do /, "").replace(/ ET\.$/, "")} ET. If you prefer ${requestedDayWord}, first opening is ${firstOnDayTime} ET.`;
+          const nextDayWord = dayWord(earliestWin.start).toLowerCase();
+          const nextTime = earliestWin.label.replace(/^... /, "");
+          const reqDay = dayWord(firstOnDay.start);
+          const reqTime = firstOnDay.label.replace(/^... /, "");
+          const line = `Next available ${pod} is ${nextDayWord} at ${nextTime} ET. If you prefer ${reqDay}, first opening is ${reqTime} ET.`;
           const t = await tone(`${line} What’s better?`, ctx, persona);
-          const combined = [earliestWin, firstOnDay];
-          return { type: "slots", text: t, date: ctx.date, slots: combined };
+          return { type: "slots", text: t, date: ctx.date, slots: [earliestWin, firstOnDay] };
         }
 
-        // If we only have a first opening on that day
         if (firstOnDay) {
-          const requestedDayWord = dayWordFromIso(firstOnDay.start);
-          const firstOnDayTime = firstOnDay.label.replace(/^... /, "");
-          const t = await tone(`${requestedDayWord} morning is full. First opening that day is ${firstOnDayTime} ET. Want that, or should I check another morning?`, ctx, persona);
+          const reqDay = dayWord(firstOnDay.start);
+          const reqTime = firstOnDay.label.replace(/^... /, "");
+          const t = await tone(`${reqDay} ${pod} is full. First opening that day is ${reqTime} ET. Want that, or should I check another ${pod}?`, ctx, persona);
           return { type: "slots", text: t, date: ctx.date, slots: [firstOnDay] };
         }
 
-        // If the day itself has no openings, fall back to asking
-        const t = await tone("That day looks packed. Should I look at the next morning, or another day?", ctx, persona);
+        const t = await tone("That day looks packed. Should I try the next morning, or another day?", ctx, persona);
         return { type: "text", text: t };
       }
 
-      // 3) If they gave only a window (morning/afternoon/evening), find earliest day(s) with that window
+      // Window only → earliest days with that window
       if (!ctx.date && pod) {
-        const enabled = await getLarge(null);
-        const inWin = filterByWindow(enabled, pod);
+        const enabled = await getEnabled(null);
+        const inWin = filterByPod(enabled, pod);
         if (inWin.length === 0) {
           const t = await tone("That window looks full. Want me to check later that day or try another day?", ctx, persona);
           return { type: "text", text: t };
@@ -237,11 +217,11 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         return { type: "slots", text: t, date: null, slots: inWin };
       }
 
-      // 4) Day only: offer a few for that day (any window)
+      // Day only → show a few options on that day
       if (ctx.date && !pod) {
-        const enabled = await getLarge(ctx.date);
+        const enabled = await getEnabled(ctx.date);
         if (enabled.length === 0) {
-          const t = await tone("I’m not seeing openings that day. Want to try another day, or a time-of-day instead?", ctx, persona);
+          const t = await tone("I’m not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(enabled.slice(0, 4));
@@ -249,21 +229,25 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         return { type: "slots", text: t, date: ctx.date, slots: enabled };
       }
 
-      // Fallback safety
-      const t = await tone("What day works — or morning, afternoon, or evening? (Times are in Eastern Time.)", ctx, persona);
+      // Safety
+      const t = await tone("What day works for you, or morning/afternoon/evening? (ET.)", ctx, persona);
       return { type: "text", text: t };
     } catch {
       return { type: "error", text: "Couldn’t fetch times — mind trying again?" };
     }
   }
 
-  /* First greet, then short discovery */
+  /* Greet + directional fallback */
   if (!ctx.historyCount || ctx.historyCount < 1) {
     const p = personas[pickPersona(ctx)];
     const t = await tone(pick(p.greetFirstTime), ctx, persona);
     return { type: "text", text: t };
   }
 
-  const t = await tone("Got it. What kind of business is this, and do you prefer a quick phone call or Google Meet?", ctx, persona);
+  const t = await tone(
+    "Got it. To set up a quick call, what day works—or morning, afternoon, or evening? (ET.)",
+    ctx,
+    persona
+  );
   return { type: "text", text: t };
 }

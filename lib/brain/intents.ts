@@ -20,6 +20,12 @@ const EVENING = /\bevening|night\b/i;
 // Loose time phrases like "10am", "around 6", "6:30 pm"
 const CLOCK_RE = /(around|about|after|before|by)?\s*\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
 
+// Expanded human intent (single-word preferences included)
+const HUMAN_RE =
+  /\b(talk to (a )?(human|person|rep|agent)|speak to (someone|a person)|human support)\b/i;
+const HUMAN_SHORT_RE =
+  /^(?:phone|call|phone call|google ?meet|meet|video call|video)$/i;
+
 function clockToPartOfDay(text: string): "morning" | "afternoon" | "evening" | undefined {
   const m = text.toLowerCase().match(CLOCK_RE);
   if (!m) return undefined;
@@ -30,10 +36,8 @@ function clockToPartOfDay(text: string): "morning" | "afternoon" | "evening" | u
   if (ap === "am") return "morning";
   if (ap === "pm") {
     if (hh >= 5 && hh <= 8) return "evening"; // 5–8pm
-    return "afternoon"; // noon–4pm and late
+    return "afternoon"; // noon–4pm and beyond
   }
-
-  // No am/pm: bias to human expectation (1–7 => evening; 8–11 => morning; 12 => afternoon)
   if (hh === 12) return "afternoon";
   if (hh >= 1 && hh <= 7) return "evening";
   if (hh >= 8 && hh <= 11) return "morning";
@@ -49,13 +53,14 @@ export function detectIntent(text: string): Intent {
   if (/\b(checkout|pay( now)?|buy|sign ?up)\b/.test(low)) return { kind: "pay" };
   if (/\b(price|pricing|cost)\b/.test(low)) return { kind: "pricing" };
 
-  // Human handoff
-  if (/\b(talk to (a )?(human|person|rep|agent)|speak to (someone|a person))\b/.test(low))
-    return { kind: "human" };
+  // Human handoff / preference
+  if (HUMAN_RE.test(low) || HUMAN_SHORT_RE.test(low)) return { kind: "human" };
 
-  // Explicit scheduling language
-  if (/\b(book|schedule|set up|hop on)\b.*\b(call|meeting|meet|phone)\b/.test(low) ||
-      /\b(available|availability|times?|time slots?|slots?)\b/.test(low)) {
+  // Scheduling / availability
+  if (
+    /\b(book|schedule|set up|hop on)\b.*\b(call|meeting|meet|phone)\b/.test(low) ||
+    /\b(available|availability|times?|time slots?|slots?)\b/.test(low)
+  ) {
     return { kind: "book" };
   }
 
@@ -80,14 +85,17 @@ export function detectIntent(text: string): Intent {
   if (CLOCK_RE.test(low)) return { kind: "book" };
 
   // Capability / use-case / integrations
-  if (/\b(can it|is it possible|does it|do you|support|handle|integrate|work with)\b/.test(low) ||
-      /\b(appointments?|booking|sales|support|instagram|whatsapp|sms|dms?)\b/.test(low)) {
+  if (
+    /\b(can it|is it possible|does it|do you|support|handle|integrate|work with)\b/.test(low) ||
+    /\b(appointments?|booking|sales|support|instagram|whatsapp|sms|dms?)\b/.test(low)
+  ) {
     return { kind: "capability" };
   }
 
   return { kind: "fallback" };
 }
 
+// Reserved for later server-side day resolution.
 export function toDateFilterFromWord(_word: string, _tz = "America/New_York"): DateFilter | null {
   return null;
 }
