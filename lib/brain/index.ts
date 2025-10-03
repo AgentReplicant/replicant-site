@@ -5,7 +5,7 @@ import { getSlots, bookSlot, getCheckoutLink } from "./actions";
 import type { BrainCtx, BrainResult, Slot } from "./types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
-const POD: Record<"morning"|"afternoon"|"evening", [number, number]> = {
+const POD: Record<"morning" | "afternoon" | "evening", [number, number]> = {
   morning: [8 * 60, 11 * 60 + 59],
   afternoon: [12 * 60, 16 * 60 + 59],
   evening: [17 * 60, 20 * 60 + 59],
@@ -14,10 +14,12 @@ const POD: Record<"morning"|"afternoon"|"evening", [number, number]> = {
 /* ---------- Helpers ---------- */
 const personasList: PersonaId[] = ["alex", "riley", "jordan", "sora"];
 
-function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
+function pick<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 function pickPersona(ctx: BrainCtx): PersonaId {
-  const s = (ctx.sessionId || "") + "|p3";
+  const s = (ctx.sessionId || "") + "|p4";
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return personasList[Math.abs(h) % personasList.length];
@@ -92,6 +94,50 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
   }
 }
 
+/* ---------- Repeat guard & clarifiers ---------- */
+const ASK_VARIANTS = [
+  "What day works for you—or morning, afternoon, or evening? (ET.)",
+  "Happy to set it up. Do you have a day in mind, or is a window (morning/afternoon/evening) easier? (ET.)",
+  "We can lock it in—pick a day, or just say morning/afternoon/evening. (ET.)",
+];
+
+function norm(s?: string) {
+  return (s || "").toLowerCase().replace(/\s+/g, " ").replace(/[.,!?;:()\[\]'"`]/g, "").trim();
+}
+function looksLikeSchedulingAsk(s: string) {
+  return /\bmorning|afternoon|evening\b/i.test(s) || /\bwhat day works\b/i.test(s);
+}
+function looksLikeCapabilityPitch(s: string) {
+  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s);
+}
+function clarifierFor(text: string, ctx: BrainCtx) {
+  const lastUser = (ctx.lastUser || "").trim();
+  if (looksLikeSchedulingAsk(text)) {
+    return lastUser
+      ? `Just to be sure I got you: “${lastUser}”. To book you, I just need **either** a day **or** a window (morning/afternoon/evening). What’s best? (ET.)`
+      : "To book you, I just need either a day or a window (morning/afternoon/evening). What works? (ET.)";
+  }
+  if (looksLikeCapabilityPitch(text)) {
+    return "Yep, we handle that. Want a quick walkthrough, or should we pick a time to get you set up?";
+  }
+  return lastUser
+    ? `I might be repeating myself. Did I understand “${lastUser}” correctly? If you’re ready, share a day or morning/afternoon/evening and I’ll pull times (ET).`
+    : "I might be repeating myself. If you’re ready, share a day or morning/afternoon/evening and I’ll pull times (ET).";
+}
+function guardRepeat(text: string, ctx: BrainCtx) {
+  if (!text) return text;
+  if (!ctx.lastAssistant) return text;
+  if (norm(text) === norm(ctx.lastAssistant)) {
+    return clarifierFor(text, ctx);
+  }
+  return text;
+}
+async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
+  const t = await tone(text, ctx, persona);
+  const guarded = guardRepeat(t, ctx);
+  return guarded === t ? t : await tone(guarded, ctx, persona);
+}
+
 /* ---------- Brain ---------- */
 export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResult> {
   const persona = pickPersona(ctx);
@@ -104,15 +150,18 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     if (!start || !end || !email) return { type: "error", text: "I’ll need an email for the invite to confirm." };
     try {
       const r = await bookSlot({
-        start, end, email,
+        start,
+        end,
+        email,
         mode: mode === "video" ? "video" : "phone",
         phone: mode === "phone" ? (phone || "") : undefined,
         summary: "Replicant — Intro Call",
-        description: mode === "phone"
-          ? `Phone call. We will call: ${phone || "(number not provided)"}.`
-          : "Auto-booked from chat. Times shown/scheduled in ET.",
+        description:
+          mode === "phone"
+            ? `Phone call. We will call: ${phone || "(number not provided)"}.`
+            : "Auto-booked from chat. Times shown/scheduled in ET.",
       });
-      const t = await tone("All set — calendar invite sent.", ctx, persona);
+      const t = await say("All set — calendar invite sent.", ctx, persona);
       return { type: "booked", when: r.when, meetLink: r.meetLink };
     } catch {
       return { type: "error", text: "Couldn’t book that time — want to try another?" };
@@ -123,20 +172,20 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "pay") {
     try {
       const { url } = getCheckoutLink();
-      const t = await tone("Here’s a secure checkout link for you:", ctx, persona);
+      const t = await say("Here’s a secure checkout link for you:", ctx, persona);
       return { type: "action", action: "open_url", url, text: t };
     } catch {
       return { type: "error", text: "Checkout isn’t available yet." };
     }
   }
   if (kind === "pricing") {
-    const t = await tone(`${copy.pricingNudge} ${copy.valueCompare}`, ctx, persona);
+    const t = await say(`${copy.pricingNudge} ${copy.valueCompare}`, ctx, persona);
     return { type: "text", text: t };
   }
 
   /* Human intent → go straight to scheduling ask (no loop) */
   if (kind === "human") {
-    const t = await tone("Great—let’s set it up. What day works, or do you prefer morning, afternoon, or evening? (ET.)", ctx, persona);
+    const t = await say(pick(ASK_VARIANTS), ctx, persona);
     return { type: "text", text: t };
   }
 
@@ -146,7 +195,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     const text = early
       ? "We specialize in booking agents, customer support agents, and sales agents. For appointments + FAQs, our booking + support combo handles intake, live availability, and answers in your voice—you can edit the wording anytime."
       : "Yep—our booking + support agents handle that. Want me to help you set it up?";
-    const t = await tone(text, ctx, persona);
+    const t = await say(text, ctx, persona);
     return { type: "text", text: t };
   }
 
@@ -156,7 +205,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
 
     // Ask for day or window first (ET note shown here)
     if (!ctx.date && !pod) {
-      const t = await tone("What day works for you, or morning/afternoon/evening? (Times are in Eastern Time.)", ctx, persona);
+      const t = await say(pick(ASK_VARIANTS), ctx, persona);
       return { type: "text", text: t };
     }
 
@@ -166,14 +215,14 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     }
 
     try {
-      // If day + window (e.g., “Fri 10am/morning”) → try that day/window first
+      // If day + window (e.g., “Fri morning” or “Fri 10am”) → try that day/window first
       if (ctx.date && pod) {
         const dayEnabled = await getEnabled(ctx.date);
         const dayWin = filterByPod(dayEnabled, pod);
 
         if (dayWin.length > 0) {
           const phrase = phraseForSlots(dayWin.slice(0, 3));
-          const t = await tone(`${phrase} What works for you?`, ctx, persona);
+          const t = await say(`${phrase} What works for you?`, ctx, persona);
           return { type: "slots", text: t, date: ctx.date, slots: dayWin };
         }
 
@@ -189,18 +238,22 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
           const reqDay = dayWord(firstOnDay.start);
           const reqTime = firstOnDay.label.replace(/^... /, "");
           const line = `Next available ${pod} is ${nextDayWord} at ${nextTime} ET. If you prefer ${reqDay}, first opening is ${reqTime} ET.`;
-          const t = await tone(`${line} What’s better?`, ctx, persona);
+          const t = await say(`${line} What’s better?`, ctx, persona);
           return { type: "slots", text: t, date: ctx.date, slots: [earliestWin, firstOnDay] };
         }
 
         if (firstOnDay) {
           const reqDay = dayWord(firstOnDay.start);
           const reqTime = firstOnDay.label.replace(/^... /, "");
-          const t = await tone(`${reqDay} ${pod} is full. First opening that day is ${reqTime} ET. Want that, or should I check another ${pod}?`, ctx, persona);
+          const t = await say(
+            `${reqDay} ${pod} is full. First opening that day is ${reqTime} ET. Want that, or should I check another ${pod}?`,
+            ctx,
+            persona
+          );
           return { type: "slots", text: t, date: ctx.date, slots: [firstOnDay] };
         }
 
-        const t = await tone("That day looks packed. Should I try the next morning, or another day?", ctx, persona);
+        const t = await say("That day looks packed. Should I try the next morning, or another day?", ctx, persona);
         return { type: "text", text: t };
       }
 
@@ -209,11 +262,11 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         const enabled = await getEnabled(null);
         const inWin = filterByPod(enabled, pod);
         if (inWin.length === 0) {
-          const t = await tone("That window looks full. Want me to check later that day or try another day?", ctx, persona);
+          const t = await say("That window looks full. Want me to check later that day or try another day?", ctx, persona);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(inWin.slice(0, 3));
-        const t = await tone(`${phrase} What works for you?`, ctx, persona);
+        const t = await say(`${phrase} What works for you?`, ctx, persona);
         return { type: "slots", text: t, date: null, slots: inWin };
       }
 
@@ -221,16 +274,16 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
       if (ctx.date && !pod) {
         const enabled = await getEnabled(ctx.date);
         if (enabled.length === 0) {
-          const t = await tone("I’m not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
+          const t = await say("I’m not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(enabled.slice(0, 4));
-        const t = await tone(`${phrase} What works for you?`, ctx, persona);
+        const t = await say(`${phrase} What works for you?`, ctx, persona);
         return { type: "slots", text: t, date: ctx.date, slots: enabled };
       }
 
       // Safety
-      const t = await tone("What day works for you, or morning/afternoon/evening? (ET.)", ctx, persona);
+      const t = await say(pick(ASK_VARIANTS), ctx, persona);
       return { type: "text", text: t };
     } catch {
       return { type: "error", text: "Couldn’t fetch times — mind trying again?" };
@@ -240,11 +293,11 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   /* Greet + directional fallback */
   if (!ctx.historyCount || ctx.historyCount < 1) {
     const p = personas[pickPersona(ctx)];
-    const t = await tone(pick(p.greetFirstTime), ctx, persona);
+    const t = await say(pick(p.greetFirstTime), ctx, persona);
     return { type: "text", text: t };
   }
 
-  const t = await tone(
+  const t = await say(
     "Got it. To set up a quick call, what day works—or morning, afternoon, or evening? (ET.)",
     ctx,
     persona
