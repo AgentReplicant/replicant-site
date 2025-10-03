@@ -2,6 +2,7 @@
 import type { DateFilter, Slot } from "./types";
 
 function baseUrl() {
+  // Prefer explicit, then Vercel-provided, else last-resort localhost (dev only)
   const explicit =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.SITE_URL ||
@@ -37,6 +38,8 @@ export async function bookSlot(args: {
   start: string;
   end: string;
   email: string;
+  mode?: "video" | "phone";
+  phone?: string;
   summary?: string;
   description?: string;
 }) {
@@ -48,11 +51,23 @@ export async function bookSlot(args: {
   });
   const json = await res.json().catch(() => ({} as any));
   if (!json?.ok) throw new Error(json?.error || "schedule failed");
-  return json as { ok: true; eventId: string; htmlLink?: string; meetLink?: string };
+  return json as {
+    ok: true;
+    eventId: string;
+    htmlLink?: string;
+    meetLink?: string;
+    when?: string;
+    start?: string;
+    end?: string;
+    mode?: string;
+    phone?: string;
+  };
 }
 
 export function getCheckoutLink(): { url: string } {
-  const url = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK || process.env.STRIPE_PAYMENT_LINK;
+  const url =
+    process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK ||
+    process.env.STRIPE_PAYMENT_LINK;
   if (!url) throw new Error("Payment link not configured");
   return { url };
 }
