@@ -19,7 +19,7 @@ function pick<T>(arr: T[]): T {
 }
 
 function pickPersona(ctx: BrainCtx): PersonaId {
-  const s = (ctx.sessionId || "") + "|p4";
+  const s = (ctx.sessionId || "") + "|p5";
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return personasList[Math.abs(h) % personasList.length];
@@ -94,7 +94,7 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
   }
 }
 
-/* ---------- Repeat guard & clarifiers ---------- */
+/* ---------- Theme-aware repeat guard & clarifiers ---------- */
 const ASK_VARIANTS = [
   "What day works for you—or morning, afternoon, or evening? (ET.)",
   "Happy to set it up. Do you have a day in mind, or is a window (morning/afternoon/evening) easier? (ET.)",
@@ -108,34 +108,66 @@ function looksLikeSchedulingAsk(s: string) {
   return /\bmorning|afternoon|evening\b/i.test(s) || /\bwhat day works\b/i.test(s);
 }
 function looksLikeCapabilityPitch(s: string) {
-  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s);
+  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s) ||
+         /\bbooking \+ support\b/i.test(s);
 }
-function clarifierFor(text: string, ctx: BrainCtx) {
+function looksLikeClarifier(s: string) {
+  return /\bI might be repeating myself\b/i.test(s) || /\bto book you, I just need\b/i.test(s);
+}
+function isInfoRequest(s?: string) {
+  if (!s) return false;
+  return /\b(info|information|details?|explain|how (?:does|do) (?:it|this) work|benefits?|beneficial|why|for what)\b/i.test(s);
+}
+
+function clarifierForScheduling(ctx: BrainCtx) {
   const lastUser = (ctx.lastUser || "").trim();
-  if (looksLikeSchedulingAsk(text)) {
-    return lastUser
-      ? `Just to be sure I got you: “${lastUser}”. To book you, I just need **either** a day **or** a window (morning/afternoon/evening). What’s best? (ET.)`
-      : "To book you, I just need either a day or a window (morning/afternoon/evening). What works? (ET.)";
+  if (lastUser) {
+    return `Just to be sure I got you: “${lastUser}”. I can explain here, or we can pick a time. If you want to book, I just need a **day** or a **window** (morning/afternoon/evening). (ET.)`;
   }
-  if (looksLikeCapabilityPitch(text)) {
-    return "Yep, we handle that. Want a quick walkthrough, or should we pick a time to get you set up?";
-  }
-  return lastUser
-    ? `I might be repeating myself. Did I understand “${lastUser}” correctly? If you’re ready, share a day or morning/afternoon/evening and I’ll pull times (ET).`
-    : "I might be repeating myself. If you’re ready, share a day or morning/afternoon/evening and I’ll pull times (ET).";
+  return "I can explain here, or we can pick a time. To book, I just need a day or a window (morning/afternoon/evening). (ET.)";
 }
-function guardRepeat(text: string, ctx: BrainCtx) {
-  if (!text) return text;
-  if (!ctx.lastAssistant) return text;
-  if (norm(text) === norm(ctx.lastAssistant)) {
-    return clarifierFor(text, ctx);
-  }
-  return text;
+
+function themeOf(s?: string): "schedule" | "capability" | "clarifier" | "other" {
+  if (!s) return "other";
+  if (looksLikeClarifier(s)) return "clarifier";
+  if (looksLikeSchedulingAsk(s)) return "schedule";
+  if (looksLikeCapabilityPitch(s)) return "capability";
+  return "other";
 }
+
 async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
-  const t = await tone(text, ctx, persona);
-  const guarded = guardRepeat(t, ctx);
-  return guarded === t ? t : await tone(guarded, ctx, persona);
+  // If we’re about to send another scheduling ask immediately after one, switch to clarifier.
+  const lastTheme = themeOf(ctx.lastAssistant);
+  const nextTheme = themeOf(text);
+  let outgoing = text;
+
+  if (lastTheme === "schedule" && nextTheme === "schedule") {
+    // If the user clearly asked for info, pivot harder.
+    if (isInfoRequest(ctx.lastUser)) {
+      outgoing = "Happy to explain here. Quick overview in two lines, then we can book if you want.";
+    } else {
+      outgoing = clarifierForScheduling(ctx);
+    }
+  }
+
+  const t = await tone(outgoing, ctx, persona);
+  // If exact duplicate after tone, fall back to clarifier to be safe.
+  if (norm(t) === norm(ctx.lastAssistant)) {
+    const c = clarifierForScheduling(ctx);
+    return (await tone(c, ctx, persona)) || c;
+  }
+  return t;
+}
+
+/* ---------- Short vertical explainer ---------- */
+function quickExplainer(userText?: string): string {
+  const t = (userText || "").toLowerCase();
+
+  if (/\b(barber|barbershop|salon|hair|beard)\b/.test(t)) {
+    return "We set up a booking agent + support agent for your shop: it handles service selection (cut/color/beard), durations, live availability, reschedules, and FAQs like hours, parking, and policies. Instagram/WhatsApp chats can flow straight to your calendar.";
+  }
+
+  return "We configure a booking agent + support agent for you. It qualifies and books from your website/IG/WhatsApp/SMS into your Google Calendar, answers FAQs in your voice, and can nudge for payments when needed.";
 }
 
 /* ---------- Brain ---------- */
@@ -189,12 +221,15 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     return { type: "text", text: t };
   }
 
-  /* Capabilities — short & non-repetitive */
+  /* Capability / info requests (info-first pivot if last was scheduling) */
   if (kind === "capability") {
-    const early = (ctx.historyCount || 0) < 6; // rough dedupe: first time early in convo
-    const text = early
-      ? "We specialize in booking agents, customer support agents, and sales agents. For appointments + FAQs, our booking + support combo handles intake, live availability, and answers in your voice—you can edit the wording anytime."
-      : "Yep—our booking + support agents handle that. Want me to help you set it up?";
+    const infoBlurb = quickExplainer(ctx.lastUser);
+    const trailing = "If you’d like, I can keep explaining here—or we can check times to get you set up.";
+    const text =
+      themeOf(ctx.lastAssistant) === "schedule"
+        ? `Here’s the quick version:\n${infoBlurb} ${trailing}`
+        : "We specialize in booking agents, customer support agents, and sales agents. " +
+          `${infoBlurb} ${trailing}`;
     const t = await say(text, ctx, persona);
     return { type: "text", text: t };
   }
@@ -294,6 +329,13 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (!ctx.historyCount || ctx.historyCount < 1) {
     const p = personas[pickPersona(ctx)];
     const t = await say(pick(p.greetFirstTime), ctx, persona);
+    return { type: "text", text: t };
+  }
+
+  // If user seems to want information, pivot instead of re-asking scheduling.
+  if (isInfoRequest(ctx.lastUser)) {
+    const text = `Here’s the quick version:\n${quickExplainer(ctx.lastUser)} If you’d like, I can keep explaining here—or we can check times to get you set up.`;
+    const t = await say(text, ctx, persona);
     return { type: "text", text: t };
   }
 

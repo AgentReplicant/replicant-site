@@ -26,17 +26,26 @@ const HUMAN_RE =
 const HUMAN_SHORT_RE =
   /^(?:phone|call|phone call|google ?meet|meet|video call|video)$/i;
 
+// “Explain/info” / benefits / product-questions that should be CAPABILITY
+const INFO_RE =
+  /\b(info|information|details?|explain|explanation|how (?:does|do) (?:it|this) work|how it works|what (?:do you|does it) do|benefits?|beneficial|help (?:my|our) (?:business|shop|company)|features?|capabilit(?:y|ies)|why|for what)\b/i;
+
+// Capability / use-case / integration triggers
+const CAPABILITY_RE =
+  /\b(can it|is it possible|does it|do you|support|handle|integrate|work with)\b/i;
+const VERTICAL_CHANNELS_RE =
+  /\b(appointments?|booking|sales|support|instagram|whatsapp|sms|dms?)\b/i;
+
 function clockToPartOfDay(text: string): "morning" | "afternoon" | "evening" | undefined {
   const m = text.toLowerCase().match(CLOCK_RE);
   if (!m) return undefined;
   let hh = parseInt(m[2], 10);
-  const mm = parseInt(m[3] || "0", 10); // eslint-disable-line @typescript-eslint/no-unused-vars
   const ap = (m[4] || "") as "am" | "pm" | "";
 
   if (ap === "am") return "morning";
   if (ap === "pm") {
-    if (hh >= 5 && hh <= 8) return "evening"; // 5–8pm
-    return "afternoon"; // noon–4pm and beyond
+    if (hh >= 5 && hh <= 8) return "evening";
+    return "afternoon";
   }
   if (hh === 12) return "afternoon";
   if (hh >= 1 && hh <= 7) return "evening";
@@ -56,10 +65,14 @@ export function detectIntent(text: string): Intent {
   // Human handoff / preference
   if (HUMAN_RE.test(low) || HUMAN_SHORT_RE.test(low)) return { kind: "human" };
 
+  // Direct information/benefits/product questions → capability
+  if (INFO_RE.test(low)) return { kind: "capability" };
+
   // Scheduling / availability
   if (
     /\b(book|schedule|set up|hop on)\b.*\b(call|meeting|meet|phone)\b/.test(low) ||
-    /\b(available|availability|times?|time slots?|slots?)\b/.test(low)
+    /\b(available|availability|times?|time slots?|slots?)\b/.test(low) ||
+    CLOCK_RE.test(low)
   ) {
     return { kind: "book" };
   }
@@ -81,14 +94,8 @@ export function detectIntent(text: string): Intent {
   // Part-of-day alone → cross-day search
   if (byWords) return { kind: "day", word: "part-of-day", partOfDay: byWords as any };
 
-  // Pure clock time implies booking intent; day will be chosen later
-  if (CLOCK_RE.test(low)) return { kind: "book" };
-
   // Capability / use-case / integrations
-  if (
-    /\b(can it|is it possible|does it|do you|support|handle|integrate|work with)\b/.test(low) ||
-    /\b(appointments?|booking|sales|support|instagram|whatsapp|sms|dms?)\b/.test(low)
-  ) {
+  if (CAPABILITY_RE.test(low) || VERTICAL_CHANNELS_RE.test(low)) {
     return { kind: "capability" };
   }
 
