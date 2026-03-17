@@ -116,7 +116,7 @@ function looksLikeClarifier(s: string) {
 }
 function isInfoRequest(s?: string) {
   if (!s) return false;
-  return /\b(info|information|details?|explain|how (?:does|do) (?:it|this) work|benefits?|beneficial|why|for what)\b/i.test(s);
+  return /\b(info|information|details?|explain|how (?:does|do) (?:it|this|that) work|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|why|for what)\b/i.test(s);
 }
 
 function clarifierForScheduling(ctx: BrainCtx) {

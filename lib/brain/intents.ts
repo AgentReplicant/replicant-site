@@ -28,7 +28,7 @@ const HUMAN_SHORT_RE =
 
 // “Explain/info” / benefits / product-questions that should be CAPABILITY
 const INFO_RE =
-  /\b(info|information|details?|explain|explanation|how (?:does|do) (?:it|this) work|how it works|what (?:do you|does it) do|benefits?|beneficial|help (?:my|our) (?:business|shop|company)|features?|capabilit(?:y|ies)|why|for what)\b/i;
+  /\b(info|information|details?|explain|explanation|how (?:does|do) (?:it|this|that) work|how it works|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|help (?:my|our) (?:business|shop|company)|features?|capabilit(?:y|ies)|why|for what)\b/i;
 
 // Capability / use-case / integration triggers
 const CAPABILITY_RE =
