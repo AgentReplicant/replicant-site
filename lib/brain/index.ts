@@ -35,6 +35,7 @@ function minsFromLabel(slot: Slot): number | null {
   if (ap === "am" && hh === 12) hh = 0;
   return hh * 60 + mm;
 }
+
 function filterByPod(slots: Slot[], pod?: "morning" | "afternoon" | "evening") {
   if (!pod) return slots;
   const [lo, hi] = POD[pod];
@@ -43,11 +44,13 @@ function filterByPod(slots: Slot[], pod?: "morning" | "afternoon" | "evening") {
     return m != null && m >= lo && m <= hi;
   });
 }
+
 function dayWord(iso: string, tz = "America/New_York") {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso));
 }
+
 function phraseForSlots(slots: Slot[], capPerDay = 3): string {
-  if (!slots.length) return "I’m not seeing anything there.";
+  if (!slots.length) return "I'm not seeing anything there.";
   const byDay = new Map<string, string[]>();
   for (const s of slots) {
     const day = s.label.split(" ")[0]; // "Thu"
@@ -102,18 +105,21 @@ const ASK_VARIANTS = [
 ];
 
 function norm(s?: string) {
-  return (s || "").toLowerCase().replace(/\s+/g, " ").replace(/[.,!?;:()\[\]'"`]/g, "").trim();
+  return (s || "").toLowerCase().replace(/\s+/g, " ").replace(/[.,!?;:()\[\]'"]/g, "").trim();
 }
+
 function looksLikeSchedulingAsk(s: string) {
   return /\bmorning|afternoon|evening\b/i.test(s) || /\bwhat day works\b/i.test(s);
 }
+
 function looksLikeCapabilityPitch(s: string) {
-  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s) ||
-         /\bbooking \+ support\b/i.test(s);
+  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s) || /\bbooking \+ support\b/i.test(s);
 }
+
 function looksLikeClarifier(s: string) {
   return /\bI might be repeating myself\b/i.test(s) || /\bto book you, I just need\b/i.test(s);
 }
+
 function isInfoRequest(s?: string) {
   if (!s) return false;
   return /\b(info|information|details?|explain|how (?:does|do) (?:it|this|that) work|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|why|for what)\b/i.test(s);
@@ -122,7 +128,7 @@ function isInfoRequest(s?: string) {
 function clarifierForScheduling(ctx: BrainCtx) {
   const lastUser = (ctx.lastUser || "").trim();
   if (lastUser) {
-    return `Just to be sure I got you: “${lastUser}”. I can explain here, or we can pick a time. If you want to book, I just need a **day** or a **window** (morning/afternoon/evening). (ET.)`;
+    return `Just to be sure I got you: "${lastUser}". I can explain here, or we can pick a time. If you want to book, I just need a **day** or a **window** (morning/afternoon/evening). (ET.)`;
   }
   return "I can explain here, or we can pick a time. To book, I just need a day or a window (morning/afternoon/evening). (ET.)";
 }
@@ -136,11 +142,10 @@ function themeOf(s?: string): "schedule" | "capability" | "clarifier" | "other" 
 }
 
 async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
-  // If we’re about to send another scheduling ask immediately after one, switch to clarifier.
+  // If we're about to send another scheduling ask immediately after one, switch to clarifier.
   const lastTheme = themeOf(ctx.lastAssistant);
   const nextTheme = themeOf(text);
   let outgoing = text;
-
   if (lastTheme === "schedule" && nextTheme === "schedule") {
     // If the user clearly asked for info, pivot harder.
     if (isInfoRequest(ctx.lastUser)) {
@@ -149,7 +154,6 @@ async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<str
       outgoing = clarifierForScheduling(ctx);
     }
   }
-
   const t = await tone(outgoing, ctx, persona);
   // If exact duplicate after tone, fall back to clarifier to be safe.
   if (norm(t) === norm(ctx.lastAssistant)) {
@@ -162,12 +166,29 @@ async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<str
 /* ---------- Short vertical explainer ---------- */
 function quickExplainer(userText?: string): string {
   const t = (userText || "").toLowerCase();
-
   if (/\b(barber|barbershop|salon|hair|beard)\b/.test(t)) {
     return "We set up a booking agent + support agent for your shop: it handles service selection (cut/color/beard), durations, live availability, reschedules, and FAQs like hours, parking, and policies. Instagram/WhatsApp chats can flow straight to your calendar.";
   }
-
   return "We configure a booking agent + support agent for you. It qualifies and books from your website/IG/WhatsApp/SMS into your Google Calendar, answers FAQs in your voice, and can nudge for payments when needed.";
+}
+
+/* ---------- Capability sub-topic detection ---------- */
+function pickCapabilityCopy(userText?: string): string {
+  const t = (userText || "").toLowerCase();
+
+  if (/\b(book|booking|appointments?|schedul|calendar)\b/.test(t)) {
+    return `${copy.capabilityBooking} ${copy.capabilityFollowup}`;
+  }
+  if (/\b(sales?|sell|leads?|qualify|checkout|close)\b/.test(t)) {
+    return `${copy.capabilitySales} ${copy.capabilityFollowup}`;
+  }
+  if (/\b(support|faq|help desk|customer service|questions)\b/.test(t)) {
+    return `${copy.capabilitySupport} ${copy.capabilityFollowup}`;
+  }
+
+  // General "what does replicant do" / "tell me about it" — give the overview
+  const overview = quickExplainer(userText);
+  return `${overview} ${copy.capabilityFollowup}`;
 }
 
 /* ---------- Brain ---------- */
@@ -179,24 +200,22 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   /* Final booking (client passes pickSlot) */
   if (input?.pickSlot) {
     const { start, end, email, mode, phone } = input.pickSlot || {};
-    if (!start || !end || !email) return { type: "error", text: "I’ll need an email for the invite to confirm." };
+    if (!start || !end || !email)
+      return { type: "error", text: "I'll need an email for the invite to confirm." };
     try {
       const r = await bookSlot({
-        start,
-        end,
-        email,
+        start, end, email,
         mode: mode === "video" ? "video" : "phone",
         phone: mode === "phone" ? (phone || "") : undefined,
         summary: "Replicant — Intro Call",
-        description:
-          mode === "phone"
-            ? `Phone call. We will call: ${phone || "(number not provided)"}.`
-            : "Auto-booked from chat. Times shown/scheduled in ET.",
+        description: mode === "phone"
+          ? `Phone call. We will call: ${phone || "(number not provided)"}.`
+          : "Auto-booked from chat. Times shown/scheduled in ET.",
       });
       const t = await say("All set — calendar invite sent.", ctx, persona);
       return { type: "booked", when: r.when, meetLink: r.meetLink };
     } catch {
-      return { type: "error", text: "Couldn’t book that time — want to try another?" };
+      return { type: "error", text: "Couldn't book that time — want to try another?" };
     }
   }
 
@@ -204,32 +223,32 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "pay") {
     try {
       const { url } = getCheckoutLink();
-      const t = await say("Here’s a secure checkout link for you:", ctx, persona);
+      const t = await say("Here's a secure checkout link for you:", ctx, persona);
       return { type: "action", action: "open_url", url, text: t };
     } catch {
-      return { type: "error", text: "Checkout isn’t available yet." };
+      return { type: "error", text: "Checkout isn't available yet." };
     }
   }
+
   if (kind === "pricing") {
     const t = await say(`${copy.pricingNudge} ${copy.valueCompare}`, ctx, persona);
     return { type: "text", text: t };
   }
 
-  /* Human intent → go straight to scheduling ask (no loop) */
+  /* Human intent → offer phone vs Meet (FIX: use copy.humanOffer instead of ASK_VARIANTS) */
   if (kind === "human") {
-    const t = await say(pick(ASK_VARIANTS), ctx, persona);
+    const t = await say(copy.humanOffer, ctx, persona);
     return { type: "text", text: t };
   }
 
-  /* Capability / info requests (info-first pivot if last was scheduling) */
+  /* Capability / info requests — use richer copy based on sub-topic */
   if (kind === "capability") {
-    const infoBlurb = quickExplainer(ctx.lastUser);
-    const trailing = "If you’d like, I can keep explaining here—or we can check times to get you set up.";
-    const text =
-      themeOf(ctx.lastAssistant) === "schedule"
-        ? `Here’s the quick version:\n${infoBlurb} ${trailing}`
-        : "We specialize in booking agents, customer support agents, and sales agents. " +
-          `${infoBlurb} ${trailing}`;
+    const capText = pickCapabilityCopy(typeof input?.message === "string" ? input.message : ctx.lastUser);
+
+    // If last message was already a scheduling ask, lead with info instead
+    const text = themeOf(ctx.lastAssistant) === "schedule"
+      ? `Here's the quick version:\n${capText}`
+      : capText;
     const t = await say(text, ctx, persona);
     return { type: "text", text: t };
   }
@@ -250,44 +269,38 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     }
 
     try {
-      // If day + window (e.g., “Fri morning” or “Fri 10am”) → try that day/window first
+      // If day + window (e.g., "Fri morning" or "Fri 10am") → try that day/window first
       if (ctx.date && pod) {
         const dayEnabled = await getEnabled(ctx.date);
         const dayWin = filterByPod(dayEnabled, pod);
-
         if (dayWin.length > 0) {
           const phrase = phraseForSlots(dayWin.slice(0, 3));
           const t = await say(`${phrase} What works for you?`, ctx, persona);
           return { type: "slots", text: t, date: ctx.date, slots: dayWin };
         }
-
         // No morning on that day → propose: next morning vs first opening on that day
         const cross = await getEnabled(null);
         const crossWin = filterByPod(cross, pod);
         const earliestWin = crossWin[0];
         const firstOnDay = dayEnabled[0];
-
         if (earliestWin && firstOnDay) {
           const nextDayWord = dayWord(earliestWin.start).toLowerCase();
           const nextTime = earliestWin.label.replace(/^... /, "");
           const reqDay = dayWord(firstOnDay.start);
           const reqTime = firstOnDay.label.replace(/^... /, "");
           const line = `Next available ${pod} is ${nextDayWord} at ${nextTime} ET. If you prefer ${reqDay}, first opening is ${reqTime} ET.`;
-          const t = await say(`${line} What’s better?`, ctx, persona);
+          const t = await say(`${line} What's better?`, ctx, persona);
           return { type: "slots", text: t, date: ctx.date, slots: [earliestWin, firstOnDay] };
         }
-
         if (firstOnDay) {
           const reqDay = dayWord(firstOnDay.start);
           const reqTime = firstOnDay.label.replace(/^... /, "");
           const t = await say(
             `${reqDay} ${pod} is full. First opening that day is ${reqTime} ET. Want that, or should I check another ${pod}?`,
-            ctx,
-            persona
+            ctx, persona
           );
           return { type: "slots", text: t, date: ctx.date, slots: [firstOnDay] };
         }
-
         const t = await say("That day looks packed. Should I try the next morning, or another day?", ctx, persona);
         return { type: "text", text: t };
       }
@@ -309,7 +322,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
       if (ctx.date && !pod) {
         const enabled = await getEnabled(ctx.date);
         if (enabled.length === 0) {
-          const t = await say("I’m not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
+          const t = await say("I'm not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(enabled.slice(0, 4));
@@ -321,7 +334,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
       const t = await say(pick(ASK_VARIANTS), ctx, persona);
       return { type: "text", text: t };
     } catch {
-      return { type: "error", text: "Couldn’t fetch times — mind trying again?" };
+      return { type: "error", text: "Couldn't fetch times — mind trying again?" };
     }
   }
 
@@ -334,15 +347,16 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
 
   // If user seems to want information, pivot instead of re-asking scheduling.
   if (isInfoRequest(ctx.lastUser)) {
-    const text = `Here’s the quick version:\n${quickExplainer(ctx.lastUser)} If you’d like, I can keep explaining here—or we can check times to get you set up.`;
+    const capText = pickCapabilityCopy(ctx.lastUser);
+    const text = `Here's the quick version:\n${capText}`;
     const t = await say(text, ctx, persona);
     return { type: "text", text: t };
   }
 
+  // FIX: Softened fallback — conversational, not scheduling-pushy
   const t = await say(
-    "Got it. To set up a quick call, what day works—or morning, afternoon, or evening? (ET.)",
-    ctx,
-    persona
+    "Happy to help. I can explain what Replicant does, answer questions, or help you book a quick call.",
+    ctx, persona
   );
   return { type: "text", text: t };
 }
