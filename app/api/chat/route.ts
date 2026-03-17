@@ -1,7 +1,7 @@
 // app/api/chat/route.ts
 import { NextResponse } from "next/server";
-import { brainProcess } from "../../../lib/brain";
-import type { BrainCtx } from "../../../lib/brain/types";
+import { brainProcess } from "@/lib/brain";
+import type { BrainCtx } from "@/lib/brain/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,15 +33,16 @@ export async function POST(req: Request) {
       historyCount,
       page: body?.filters?.page ?? 0,
       date: body?.filters?.date ?? null,
+      // FIX #1: Read lead fields that ChatWidget now sends
       lead: {
         email: body?.email,
         phone: body?.phone,
         name: body?.name,
       },
+      // FIX #7: Assign directly instead of Object.assign hack — BrainCtx already supports these
+      lastUser,
+      lastAssistant,
     };
-
-    // Attach helper fields (not part of BrainCtx type)
-    Object.assign(ctx as any, { lastUser, lastAssistant });
 
     // Input: either a structured booking pick or a user message
     const input = body?.pickSlot

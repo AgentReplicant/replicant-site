@@ -16,7 +16,7 @@ export const personas: Record<
     style: "Professional, warm",
     greetFirstTime: [
       "Hi — Alex with Replicant. I can walk you through how it works or get you set up. What are you hoping to automate first?",
-      "Hello — Alex here from Replicant. Tell me your goal and I’ll point you to the fastest path.",
+      "Hello — Alex here from Replicant. Tell me your goal and I'll point you to the fastest path.",
     ],
     greetReturning: [
       "Welcome back — want to pick up where we left off or look at times again?",
@@ -27,19 +27,23 @@ export const personas: Record<
     role: "sales",
     style: "Friendly, energetic",
     greetFirstTime: [
-      "Hey! I’m Riley with Replicant. Curious about sales, booking, or support? I can help with all three.",
+      "Hey! I'm Riley with Replicant. Curious about sales, booking, or support? I can help with all three.",
       "Hi — Riley here. Want a quick rundown or should we jump straight to setup?",
     ],
-    greetReturning: ["Nice to see you again! Ready to continue or grab a quick time?"],
+    greetReturning: [
+      "Nice to see you again! Ready to continue or grab a quick time?",
+    ],
   },
   jordan: {
     role: "sales",
     style: "Direct, ROI-driven",
     greetFirstTime: [
-      "Hi — Jordan at Replicant. Share your goal and timeline and I’ll map the quickest path.",
+      "Hi — Jordan at Replicant. Share your goal and timeline and I'll map the quickest path.",
       "Hello — Jordan from Replicant. If you want to move today, I can walk you through it in minutes.",
     ],
-    greetReturning: ["Welcome back. Do you want a phone call, a Meet, or to finish setup?"],
+    greetReturning: [
+      "Welcome back. Do you want a phone call, a Meet, or to finish setup?",
+    ],
   },
   sora: {
     role: "support",
@@ -48,7 +52,9 @@ export const personas: Record<
       "Hello — Sora from Replicant. Happy to help with questions or booking. Where should we start?",
       "Hi — Sora here. Would you like a quick overview or details on your use case?",
     ],
-    greetReturning: ["Welcome back. Want to keep going from last time or see new times?"],
+    greetReturning: [
+      "Welcome back. Want to keep going from last time or see new times?",
+    ],
   },
 };
 
@@ -57,9 +63,11 @@ export const copy = {
   askDay: "Which day works for you? (Times are shown in Eastern Time.)",
   pickTime: "Here are a few times (ET):",
   bookedOk: (when?: string) => `All set${when ? ` — ${when}` : ""}.`,
-  linkIntro: "Here’s a secure link:",
-  slotTaken: "Sorry — that time is unavailable. Here are some nearby options that day:",
-  dayFull: (label: string) => `Sorry — ${label} is fully booked. The next available is:`,
+  linkIntro: "Here's a secure link:",
+  slotTaken:
+    "Sorry — that time is unavailable. Here are some nearby options that day:",
+  dayFull: (label: string) =>
+    `Sorry — ${label} is fully booked. The next available is:`,
 
   // Pricing & value
   pricingNudge:
@@ -68,9 +76,11 @@ export const copy = {
     "Compared to staffing coverage, most teams find the ROI straightforward — this replaces after-hours and quick response needs.",
 
   // Human call
-  humanOffer: "I can set up a quick call — phone or Google Meet. What’s better for you?",
-  zoomUnavailable: "We default to Google Meet or phone. Zoom isn’t available right now.",
-  askEmail: "What’s the best email for the invite?",
+  humanOffer:
+    "I can set up a quick call — phone or Google Meet. What's better for you?",
+  zoomUnavailable:
+    "We default to Google Meet or phone. Zoom isn't available right now.",
+  askEmail: "What's the best email for the invite?",
 
   // Sales-first capability answers (referenced by brain/index.ts)
   capabilityBooking:
@@ -80,8 +90,10 @@ export const copy = {
   capabilitySupport:
     "Our support agent answers FAQs in your brand voice, asks clarifying questions when needed, and escalates to a human for edge cases. You get transcripts and contact info.",
   capabilityFollowup:
-    "If you’d like, I can drop the checkout link so you can get started, or we can grab a quick time to talk through your setup.",
+    "If you'd like, I can drop the checkout link so you can get started, or we can grab a quick time to talk through your setup.",
 
-  channelsShort: "Channels today: web. Rolling out Instagram, WhatsApp, and SMS next.",
-  salesNudge: "Want to go ahead and set it up now, or see a couple of quick call times?",
+  channelsShort:
+    "Channels today: web. Rolling out Instagram, WhatsApp, and SMS next.",
+  salesNudge:
+    "Want to go ahead and set it up now, or see a couple of quick call times?",
 };
