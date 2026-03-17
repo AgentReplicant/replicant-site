@@ -9,9 +9,11 @@ export const dynamic = "force-dynamic";
  * Stripe client
  * (keeping your current pinned version per your setup)
  */
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2025-07-30.basil",
-});
+function getStripe() {
+  return new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+    apiVersion: "2025-07-30.basil",
+  });
+}
 
 /** Health checks */
 export async function GET() {
@@ -37,7 +39,7 @@ export async function POST(req: NextRequest) {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(rawBody, sig, whsec);
+    event = getStripe().webhooks.constructEvent(rawBody, sig, whsec);
   } catch (err: any) {
     return new NextResponse(`Webhook Error: ${err.message}`, { status: 400 });
   }
