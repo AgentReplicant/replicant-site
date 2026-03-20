@@ -286,10 +286,11 @@ export default function ChatWidget() {
 
   // FIX #1: Send lead context (email, phone, name) on every brain call
   // FIX #3: Accept optional pageOverride so callers can pass the correct page
-  async function callBrain(payload: any, pageOverride?: number) {
-    const usePage = pageOverride ?? page;
+  async function callBrain(payload: any, overrides?: { page?: number; date?: DateFilter }) {
+    const usePage = overrides?.page ?? page;
+    const useDate = overrides?.date !== undefined ? overrides.date : date;
     const filters = {
-      date: date ? { y: date.y, m: date.m, d: date.d } : undefined,
+      date: useDate ? { y: useDate.y, m: useDate.m, d: useDate.d } : undefined,
       page: usePage,
     };
     const body = {
@@ -389,7 +390,7 @@ export default function ChatWidget() {
         setPage(nextPage);
         setBusy(true);
         try {
-          const data = await callBrain({ message: "book a call" }, nextPage);
+          const data = await callBrain({ message: "book a call" }, { page: nextPage });
           await handleBrainResult(data);
         } finally {
           setBusy(false);
@@ -423,7 +424,8 @@ export default function ChatWidget() {
         setPage(0);
         setBusy(true);
         try {
-          const data = await callBrain({ message: val }, 0);
+          const newDate = { y, m, d };
+          const data = await callBrain({ message: val }, { page: 0, date: newDate });
           await handleBrainResult(data);
         } finally {
           setBusy(false);
@@ -496,7 +498,8 @@ export default function ChatWidget() {
       setPage(0);
       setBusy(true);
       try {
-        const data = await callBrain({ message: val }, 0);
+        const newDate = { y, m, d };
+        const data = await callBrain({ message: val }, { page: 0, date: newDate });
         await handleBrainResult(data);
       } finally {
         setBusy(false);
