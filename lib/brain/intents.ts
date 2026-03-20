@@ -7,11 +7,12 @@ export type Intent =
   | { kind: "pricing" }
   | { kind: "pay" }
   | { kind: "human" }
+  | { kind: "human_mode"; mode: "phone" | "video" }
   | { kind: "capability" }
   | { kind: "fallback" };
 
 const DAY_WORD =
-  /(?:\b|^)(today|tmrw|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i;
+  /(?:\b|^)(today|tmrw|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i;        
 
 const MORNING = /\bmorning\b/i;
 const AFTERNOON = /\bafternoon\b/i;
@@ -20,13 +21,17 @@ const EVENING = /\bevening|night\b/i;
 // Loose time phrases like "10am", "around 6", "6:30 pm"
 const CLOCK_RE = /(around|about|after|before|by)?\s*\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
 
-// Expanded human intent (single-word preferences included)
+// Expanded human intent — catches "talk to someone", "speak to someone", etc.
 const HUMAN_RE =
-  /\b(talk to (a )?(human|person|rep|agent)|speak to (someone|a person)|human support)\b/i;
-const HUMAN_SHORT_RE =
-  /^(?:phone|call|phone call|google ?meet|meet|video call|video)$/i;
+  /\b(talk to (a )?(human|person|someone|rep|agent)|speak to (a )?(human|person|someone|rep|agent)|human support|can i talk to|can i speak to)\b/i;
 
-// “Explain/info” / benefits / product-questions that should be CAPABILITY
+// Short standalone mode replies — "phone", "call", "meet", "video" as full input only
+const HUMAN_MODE_RE =
+  /^(?:phone|call|phone call)$/i;
+const VIDEO_MODE_RE =
+  /^(?:google ?meet|meet|video call|video)$/i;
+
+// "Explain/info" / benefits / product-questions that should be CAPABILITY
 const INFO_RE =
   /\b(info|information|details?|explain|explanation|how (?:does|do) (?:it|this|that) work|how it works|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|help (?:my|our) (?:business|shop|company)|features?|capabilit(?:y|ies)|why|for what)\b/i;
 
@@ -62,8 +67,12 @@ export function detectIntent(text: string): Intent {
   if (/\b(checkout|pay( now)?|buy|sign ?up)\b/.test(low)) return { kind: "pay" };
   if (/\b(price|pricing|cost)\b/.test(low)) return { kind: "pricing" };
 
-  // Human handoff / preference
-  if (HUMAN_RE.test(low) || HUMAN_SHORT_RE.test(low)) return { kind: "human" };
+  // Human handoff / preference (full phrases)
+  if (HUMAN_RE.test(low)) return { kind: "human" };
+
+  // Short mode replies — "phone", "call", "meet", "video" as standalone answers
+  if (HUMAN_MODE_RE.test(t)) return { kind: "human_mode", mode: "phone" };
+  if (VIDEO_MODE_RE.test(t)) return { kind: "human_mode", mode: "video" };
 
   // Direct information/benefits/product questions → capability
   if (INFO_RE.test(low)) return { kind: "capability" };
