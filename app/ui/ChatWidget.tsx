@@ -407,10 +407,13 @@ export default function ChatWidget() {
           appendBot(
             "Google Meet works. What's the best email for the invite?"
           );
-        } else {
+        } else if (/\b(phone|call)\b/i.test(val)) {
           setMode("phone");
           setPending("phone");
           appendBot("Phone works. What's the best number to call?");
+        } else {
+          setPending("mode");
+          appendBot("Do you want a phone call or Google Meet?");
         }
         return;
       }
@@ -449,6 +452,13 @@ export default function ChatWidget() {
     }
 
     if (pending === "phone") {
+      // Allow mode switch if user asks for meet/video instead
+      if (/\b(google meet|meet|video)\b/i.test(val)) {
+        setMode("video");
+        setPending("email");
+        appendBot("Google Meet it is. What's the best email for the invite?");
+        return;
+      }
       const digits = onlyDigits(val);
       if (digits.length < 7) {
         appendBot("Could you share the full number with area code?");
