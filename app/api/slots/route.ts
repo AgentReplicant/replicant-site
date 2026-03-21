@@ -35,14 +35,18 @@ const LEAD_MINUTES =
     : LEAD_MIN_DEFAULT;
 
 function fmtLabel(d: Date, tz: string) {
-  return new Intl.DateTimeFormat("en-US", {
+  const datePart = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(d);
+  const timePart = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
-  })
-    .format(d)
-    .replace(",", "");
+  }).format(d);
+  return `${datePart} at ${timePart} ET`;
 }
 function pad2(n: number) {
   return String(n).padStart(2, "0");

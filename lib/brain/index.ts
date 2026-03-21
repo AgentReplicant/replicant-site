@@ -53,8 +53,10 @@ function phraseForSlots(slots: Slot[], capPerDay = 3): string {
   if (!slots.length) return "I'm not seeing anything there.";
   const byDay = new Map<string, string[]>();
   for (const s of slots) {
-    const day = s.label.split(" ")[0];
-    const time = s.label.replace(/^... /, "");
+    // Labels now look like "Fri, Mar 28 at 4:30 PM ET"
+    const atIdx = s.label.indexOf(" at ");
+    const day = atIdx !== -1 ? s.label.slice(0, atIdx) : s.label.split(" ")[0];
+    const time = atIdx !== -1 ? s.label.slice(atIdx + 4) : s.label;
     const arr = byDay.get(day) || [];
     arr.push(time);
     byDay.set(day, arr);
@@ -62,13 +64,13 @@ function phraseForSlots(slots: Slot[], capPerDay = 3): string {
   const parts: string[] = [];
   for (const [day, times] of byDay) {
     const short = times.slice(0, capPerDay);
-    if (short.length === 1) parts.push(`${day} ${short[0]}`);
-    else if (short.length === 2) parts.push(`${day} ${short[0]} or ${short[1]}`);
-    else parts.push(`${day} ${short[0]}, ${short[1]}, or ${short[2]}`);
+    if (short.length === 1) parts.push(`${day} at ${short[0]}`);
+    else if (short.length === 2) parts.push(`${day} at ${short[0]} or ${short[1]}`);
+    else parts.push(`${day} at ${short[0]}, ${short[1]}, or ${short[2]}`);
   }
-  if (parts.length === 1) return `I can do ${parts[0]} ET.`;
+  if (parts.length === 1) return `I can do ${parts[0]}.`;
   const last = parts[parts.length - 1];
-  return `I can do ${parts.slice(0, -1).join("; ")}, or ${last} ET.`;
+  return `I can do ${parts.slice(0, -1).join("; ")}, or ${last}.`;
 }
 
 /* ---------- Tone smoothing (optional) ---------- */
