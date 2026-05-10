@@ -40,14 +40,14 @@ export default function LeadForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
-      <div className="grid gap-4">
+    <form onSubmit={onSubmit} className="space-y-5">
+      <div className="grid gap-5">
         <label className="text-sm text-slate-300">
           Name
           <input
             autoComplete="name"
             required
-            className="mt-1 w-full rounded-lg bg-white/5 px-3 py-2 text-white placeholder-white/50 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60"
+            className="mt-1.5 w-full rounded-lg bg-white/5 px-3 py-2.5 text-white placeholder-white/40 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60 transition"
             placeholder="Jane Doe"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -60,7 +60,7 @@ export default function LeadForm() {
             type="email"
             autoComplete="email"
             required
-            className="mt-1 w-full rounded-lg bg-white/5 px-3 py-2 text-white placeholder-white/50 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60"
+            className="mt-1.5 w-full rounded-lg bg-white/5 px-3 py-2.5 text-white placeholder-white/40 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60 transition"
             placeholder="jane@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -71,7 +71,7 @@ export default function LeadForm() {
           Phone (optional)
           <input
             autoComplete="tel"
-            className="mt-1 w-full rounded-lg bg-white/5 px-3 py-2 text-white placeholder-white/50 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60"
+            className="mt-1.5 w-full rounded-lg bg-white/5 px-3 py-2.5 text-white placeholder-white/40 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60 transition"
             placeholder="(555) 123-4567"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -79,28 +79,27 @@ export default function LeadForm() {
         </label>
 
         <label className="text-sm text-slate-300">
-          Notes
+          Business Details
           <textarea
-            rows={4}
-            className="mt-1 w-full rounded-lg bg-white/5 px-3 py-2 text-white placeholder-white/50 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60"
-            placeholder="Tell us about your use case…"
+            rows={5}
+            className="mt-1.5 w-full rounded-lg bg-white/5 px-3 py-2.5 text-white placeholder-white/40 outline-none ring-1 ring-white/10 focus:ring-2 focus:ring-sky-500/60 transition"
+            placeholder="Tell us about your business, current website, booking/quote flow, and what you want improved."
             value={message}
             onChange={(e) => setMessage(e.target.value)}
           />
         </label>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 pt-1">
         <button
           type="submit"
           disabled={disabled}
-          className="inline-flex w-auto items-center rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg ring-1 ring-sky-400/20 hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.99] transition"
+          className="inline-flex w-auto items-center rounded-lg bg-sky-500 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-sky-500/20 ring-1 ring-sky-400/20 hover:bg-sky-400 hover:shadow-sky-500/30 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.99] transition"
         >
-          {state === "loading" ? "Sending…" : "Send"}
+          {state === "loading" ? "Sending…" : "Request Audit"}
         </button>
-
         {state === "success" && (
-          <span className="text-sm text-emerald-400">Thanks — we’ll reach out.</span>
+          <span className="text-sm text-emerald-400">Thanks — we'll reach out.</span>
         )}
         {state === "error" && (
           <span className="text-sm text-rose-400">Something went wrong. Try again.</span>

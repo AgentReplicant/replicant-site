@@ -6,7 +6,7 @@ import { Check } from "lucide-react";
 
 const tiers = [
   {
-    name: "Starter Website",
+    name: "Starter Site",
     price: "$750",
     blurb: "For simple service businesses that need a clean online presence.",
     features: [
@@ -22,7 +22,7 @@ const tiers = [
     highlighted: false,
   },
   {
-    name: "Booking / Quote Website",
+    name: "Booking / Quote Site",
     price: "$1,250",
     blurb: "For businesses that want a stronger conversion flow.",
     features: [
@@ -37,7 +37,7 @@ const tiers = [
     highlighted: true,
   },
   {
-    name: "Website + Replicant Assistant",
+    name: "Site + Assistant",
     price: "$2,000",
     priceSuffix: "setup + monthly support",
     blurb: "For businesses that want the site to answer questions, capture leads, and help customers take action.",
@@ -57,18 +57,18 @@ const tiers = [
 
 export default function Pricing() {
   return (
-    <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-6">
       <div className="mx-auto max-w-2xl text-center">
-        <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+        <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-white">
           Pricing
         </h2>
-        <p className="mt-3 text-white/70">
+        <p className="mt-4 text-white/65 leading-relaxed">
           Starting-at pricing. Final scope depends on your industry, content,
-          and integrations — we’ll confirm in your free audit.
+          and integrations — we'll confirm in your free audit.
         </p>
       </div>
 
-      <div className="mt-10 grid gap-6 lg:grid-cols-3">
+      <div className="mt-12 grid gap-6 lg:grid-cols-3 lg:items-stretch">
         {tiers.map((t, i) => (
           <motion.div
             key={t.name}
@@ -76,49 +76,63 @@ export default function Pricing() {
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: i * 0.05 }}
             viewport={{ once: true }}
-            className={`rounded-2xl border p-6 md:p-8 flex flex-col ${
-              t.highlighted
-                ? "border-sky-400/60 bg-sky-500/10 shadow-lg shadow-sky-500/10"
-                : "border-white/10 bg-white/5"
-            }`}
+            className={`relative ${t.highlighted ? "lg:-mt-2 lg:mb-2" : ""}`}
           >
-            <div>
-              <h3 className="text-xl font-semibold text-white">{t.name}</h3>
-              <p className="mt-2 text-sm text-white/70">{t.blurb}</p>
-              <div className="mt-4">
-                <span className="text-xs text-white/60">Starting at</span>
-                <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-3xl md:text-4xl font-bold text-white">
-                    {t.price}
-                  </span>
-                  {t.priceSuffix && (
-                    <span className="text-sm text-white/70">
-                      {t.priceSuffix}
-                    </span>
-                  )}
-                </div>
+            {t.highlighted && (
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                <span className="inline-flex items-center rounded-full bg-sky-500 px-3 py-1 text-xs font-semibold text-white shadow-lg shadow-sky-500/30">
+                  Recommended
+                </span>
               </div>
-            </div>
+            )}
 
-            <ul className="mt-6 space-y-2 flex-1">
-              {t.features.map((f) => (
-                <li key={f} className="flex items-start gap-2 text-sm text-white/80">
-                  <Check className="h-4 w-4 mt-0.5 text-sky-400 shrink-0" />
-                  <span>{f}</span>
-                </li>
-              ))}
-            </ul>
-
-            <a
-              href="/get-started"
-              className={`mt-8 inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition w-full ${
+            <div
+              className={`h-full rounded-2xl border p-7 md:p-8 flex flex-col transition ${
                 t.highlighted
-                  ? "bg-sky-500 text-white hover:shadow-lg"
-                  : "bg-slate-800/70 border border-slate-700 text-slate-100 hover:bg-slate-800"
+                  ? "border-sky-400/40 bg-gradient-to-b from-sky-500/[0.08] to-white/[0.03] shadow-xl shadow-sky-500/10"
+                  : "border-white/10 bg-white/[0.03] hover:border-white/15 hover:bg-white/[0.05]"
               }`}
             >
-              {t.cta}
-            </a>
+              <div>
+                <h3 className="text-xl font-semibold text-white">{t.name}</h3>
+                <p className="mt-2 text-sm text-white/65 leading-relaxed">{t.blurb}</p>
+                <div className="mt-5">
+                  <span className="text-xs uppercase tracking-wider text-white/50">
+                    Starting at
+                  </span>
+                  <div className="mt-1 flex items-baseline gap-2 flex-wrap">
+                    <span className="text-3xl md:text-4xl font-bold text-white">
+                      {t.price}
+                    </span>
+                    {t.priceSuffix && (
+                      <span className="text-sm text-white/65">
+                        {t.priceSuffix}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <ul className="mt-7 space-y-2.5 flex-1">
+                {t.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2.5 text-sm text-white/80">
+                    <Check className="h-4 w-4 mt-0.5 text-sky-400 shrink-0" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <a
+                href="/get-started"
+                className={`mt-8 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition w-full ${
+                  t.highlighted
+                    ? "bg-sky-500 text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400 hover:shadow-sky-500/30"
+                    : "bg-white/5 border border-white/10 text-white/90 hover:bg-white/10 hover:border-white/20"
+                }`}
+              >
+                {t.cta}
+              </a>
+            </div>
           </motion.div>
         ))}
       </div>

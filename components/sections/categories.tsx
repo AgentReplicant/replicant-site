@@ -28,18 +28,18 @@ const categories = [
 
 export default function Categories() {
   return (
-    <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <section className="mx-auto max-w-7xl px-6">
       <div className="mx-auto max-w-2xl text-center">
-        <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+        <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-white">
           Choose the Website System Built for Your Business
         </h2>
-        <p className="mt-3 text-white/70">
+        <p className="mt-4 text-white/65 leading-relaxed">
           Different industries need different paths to a booked customer. We
           build for the way yours actually works.
         </p>
       </div>
 
-      <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {categories.map(({ icon: Icon, title, desc, cta }, i) => (
           <motion.div
             key={title}
@@ -47,19 +47,20 @@ export default function Categories() {
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: i * 0.05 }}
             viewport={{ once: true }}
+            className="group"
           >
-            <Card className="border-white/10 bg-white/5 h-full flex flex-col">
+            <Card className="h-full flex flex-col border-white/10 bg-white/[0.03] hover:bg-white/[0.05] hover:border-sky-400/20 hover:shadow-lg hover:shadow-sky-500/5 transition-all duration-300">
               <CardHeader>
-                <div className="mb-2 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#4E77FF] to-[#00DBAA]">
+                <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-[#4E77FF] to-[#00DBAA] shadow-lg shadow-sky-500/10 group-hover:shadow-sky-500/20 transition-shadow">
                   <Icon className="h-5 w-5 text-black" />
                 </div>
-                <CardTitle className="text-white">{title}</CardTitle>
+                <CardTitle className="text-white text-lg">{title}</CardTitle>
               </CardHeader>
-              <CardContent className="text-white/70 flex-1 flex flex-col">
-                <p className="flex-1">{desc}</p>
+              <CardContent className="text-white/65 flex-1 flex flex-col">
+                <p className="flex-1 text-sm leading-relaxed">{desc}</p>
                 <a
                   href="/get-started"
-                  className="mt-6 inline-flex items-center justify-center rounded-lg bg-sky-500 px-4 py-2 text-white text-sm font-medium shadow hover:shadow-lg transition w-full"
+                  className="mt-6 inline-flex items-center justify-center rounded-lg bg-white/5 border border-white/10 px-4 py-2.5 text-white/90 text-sm font-medium hover:bg-sky-500 hover:border-sky-400 hover:text-white transition w-full"
                 >
                   {cta}
                 </a>

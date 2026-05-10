@@ -15,34 +15,34 @@ export default function HomePage() {
     <>
       <Hero />
 
-      <section id="problem" className="py-10 md:py-24">
+      <section id="problem" className="py-16 md:py-28">
         <Problem />
       </section>
 
-      <section id="websites" className="py-10 md:py-24">
+      <section id="websites" className="py-16 md:py-28">
         <Categories />
       </section>
 
-      <section id="what-we-build" className="py-10 md:py-24">
+      <section id="what-we-build" className="py-16 md:py-28">
         <Features />
       </section>
 
-      <section id="how-it-works" className="py-10 md:py-24">
+      <section id="how-it-works" className="py-16 md:py-28">
         <HowItWorks />
       </section>
 
-      <section id="pricing" className="py-10 md:py-24">
+      <section id="pricing" className="py-16 md:py-28">
         <Pricing />
       </section>
 
-      <section id="ai-assistants" className="py-10 md:py-24">
+      <section id="ai-assistants" className="py-16 md:py-28">
         <AIAssistants />
       </section>
 
       {/* GetStarted renders its own <section id="get-started"> */}
       <GetStarted />
 
-      <section id="faq" className="py-10 md:py-24">
+      <section id="faq" className="py-16 md:py-28">
         <FAQ />
       </section>
 
