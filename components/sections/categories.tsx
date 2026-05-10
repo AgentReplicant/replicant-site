@@ -59,7 +59,7 @@ export default function Categories() {
               <CardContent className="text-white/65 flex-1 flex flex-col">
                 <p className="flex-1 text-sm leading-relaxed">{desc}</p>
                 <a
-                  href="/get-started"
+                  href="/website-audit"
                   className="mt-6 inline-flex items-center justify-center rounded-lg bg-white/5 border border-white/10 px-4 py-2.5 text-white/90 text-sm font-medium hover:bg-sky-500 hover:border-sky-400 hover:text-white transition w-full"
                 >
                   {cta}

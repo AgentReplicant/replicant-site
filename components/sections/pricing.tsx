@@ -4,7 +4,18 @@
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 
-const tiers = [
+type Tier = {
+  name: string;
+  price: string;
+  priceSuffix?: string;
+  blurb: string;
+  features: string[];
+  cta: string;
+  ctaHref: string;
+  highlighted: boolean;
+};
+
+const tiers: Tier[] = [
   {
     name: "Starter Site",
     price: "$750",
@@ -19,6 +30,7 @@ const tiers = [
       "Basic SEO",
     ],
     cta: "Get a Free Website Audit",
+    ctaHref: "/website-audit",
     highlighted: false,
   },
   {
@@ -34,6 +46,7 @@ const tiers = [
       "Analytics setup",
     ],
     cta: "Get a Free Website Audit",
+    ctaHref: "/website-audit",
     highlighted: true,
   },
   {
@@ -51,6 +64,7 @@ const tiers = [
       "Conversation logs",
     ],
     cta: "Ask About Assistant Add-Ons",
+    ctaHref: "/get-started",
     highlighted: false,
   },
 ];
@@ -123,7 +137,7 @@ export default function Pricing() {
               </ul>
 
               <a
-                href="/get-started"
+                href={t.ctaHref}
                 className={`mt-8 inline-flex items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium transition w-full ${
                   t.highlighted
                     ? "bg-sky-500 text-white shadow-lg shadow-sky-500/20 hover:bg-sky-400 hover:shadow-sky-500/30"

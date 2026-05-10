@@ -12,13 +12,13 @@ export default function Footer() {
             </h3>
             <p className="mt-1 text-sm opacity-80">
               Free website audit. Starting at <span className="font-medium">$750</span>.
-              Add a Replicant assistant when you’re ready.
+              Add a Replicant assistant when you're ready.
             </p>
           </div>
 
           <div className="flex gap-3">
             <a
-              href="/get-started"
+              href="/website-audit"
               className="inline-flex items-center rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium hover:shadow-lg transition"
             >
               Get a Free Website Audit

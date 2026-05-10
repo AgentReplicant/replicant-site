@@ -17,9 +17,9 @@ export default function Hero() {
         </p>
 
         <div className="mt-10 flex flex-wrap gap-3">
-          {/* PRIMARY: Free Website Audit → existing /get-started */}
+          {/* PRIMARY: Free Website Audit → /website-audit */}
           <a
-            href="/get-started"
+            href="/website-audit"
             className="inline-flex items-center justify-center rounded-lg bg-sky-500 px-5 py-2.5 text-white font-medium shadow-lg shadow-sky-500/20 ring-1 ring-sky-400/20 hover:bg-sky-400 hover:shadow-sky-500/30 transition"
           >
             Get a Free Website Audit
