@@ -7,7 +7,7 @@ import ChatWidget from "./ui/ChatWidget";    // ChatWidget is inside /app/ui
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className="dark h-full" suppressHydrationWarning>
       <body className="min-h-screen bg-[#0B0E12] text-white antialiased selection:bg-blue-600/30 selection:text-white">
         {/* subtle radial glow behind everything */}
         <div
