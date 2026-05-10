@@ -19,3 +19,11 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Dark dropdown menus — browsers ignore form styling for native <option> elements */
+select,
+option {
+  color-scheme: dark;
+  background-color: #0B0E12;
+  color: #ffffff;
+}
