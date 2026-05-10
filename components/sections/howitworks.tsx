@@ -4,30 +4,40 @@ import { motion } from "framer-motion";
 const steps = [
   {
     k: "01",
-    t: "Plug in your stack",
-    d: "Connect calendar, Stripe payment link, and your lead form."
+    t: "Send Your Business Info",
+    d: "Photos, services, booking links, service area, contact info, and anything customers need to know.",
   },
   {
     k: "02",
-    t: "Train with your FAQs",
-    d: "Drop in policies, offers, and tone — the agent learns fast."
+    t: "We Build the Website",
+    d: "We create a clean, mobile-first site designed around your industry and your customer’s next step.",
   },
   {
     k: "03",
-    t: "Go live in days",
-    d: "We monitor calls/messages, then tighten for conversion."
-  }
+    t: "Review and Launch",
+    d: "You review the site, request edits, and we connect your domain when it’s ready.",
+  },
+  {
+    k: "04",
+    t: "Upgrade When Ready",
+    d: "Add a Replicant assistant to answer questions, capture lead details, and guide customers toward booking, calling, or requesting a quote.",
+  },
 ];
 
 export function HowItWorks() {
   return (
-    <section id="how" className="py-16 md:py-24">
+    <section className="py-16 md:py-24">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">From setup to sales — fast</h2>
-          <p className="mt-3 text-white/70">A simple rollout that respects your time and protects your brand voice.</p>
+          <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+            How It Works
+          </h2>
+          <p className="mt-3 text-white/70">
+            A simple path from “I need a website” to a clean site your customers
+            can actually use.
+          </p>
         </div>
-        <div className="mt-10 grid gap-6 md:grid-cols-3">
+        <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           {steps.map((s, i) => (
             <motion.div
               key={s.k}

@@ -1,48 +1,38 @@
 "use client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { motion } from "framer-motion";
-import { Bot, CalendarCheck2, MessageSquare, ShieldCheck, Waves, Headphones } from "lucide-react";
+import { Globe, CalendarCheck2, Bot } from "lucide-react";
 
 const features = [
   {
-    icon: Bot,
-    title: "Conversational AI that sells",
-    desc: "Understands intent, handles objections, and routes perfectly."
+    icon: Globe,
+    title: "Professional Website",
+    desc: "A clean, mobile-first site built around your services, photos, location, reviews, and call-to-action.",
   },
   {
     icon: CalendarCheck2,
-    title: "Calendar booking, done",
-    desc: "No back-and-forth. Your agent proposes times and confirms instantly."
+    title: "Booking or Quote Flow",
+    desc: "We connect the path customers already need: booking links, quote forms, consultation requests, phone calls, or contact forms.",
   },
   {
-    icon: MessageSquare,
-    title: "Omni-channel",
-    desc: "Voice, SMS, WhatsApp, IG, and web chat from one brain."
+    icon: Bot,
+    title: "Optional AI Assistant",
+    desc: "Add a Replicant assistant to answer FAQs, qualify leads, recommend the next step, and help customers book or request a quote.",
   },
-  {
-    icon: ShieldCheck,
-    title: "Compliant and logged",
-    desc: "Consent prompts, transcripts, and safe-guards built-in."
-  },
-  {
-    icon: Waves,
-    title: "2–3s response target",
-    desc: "Fast enough to feel human; tuned for trust and flow."
-  },
-  {
-    icon: Headphones,
-    title: "Hand-off when needed",
-    desc: "Escalates to a human with context and next-best actions."
-  }
 ];
 
 export function Features() {
   return (
-    <section id="features" className="py-16 md:py-24">
+    <section className="py-16 md:py-24">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Why teams choose Replicant</h2>
-          <p className="mt-3 text-white/70">Everything you need to qualify, schedule, and convert — without adding headcount.</p>
+          <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+            What Replicant Builds
+          </h2>
+          <p className="mt-3 text-white/70">
+            A focused website system, the booking or quote path your customers
+            need, and an optional assistant when you’re ready to upgrade.
+          </p>
         </div>
         <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map(({ icon: Icon, title, desc }, i) => (

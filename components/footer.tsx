@@ -1,7 +1,5 @@
-// app/components/footer.tsx
+// components/footer.tsx
 "use client";
-
-const STRIPE_LINK = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK || "#";
 
 export default function Footer() {
   return (
@@ -9,27 +7,27 @@ export default function Footer() {
       <div className="mx-auto max-w-6xl px-4 py-10 md:py-16">
         <div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-center">
           <div>
-            <h3 className="text-lg font-semibold">Ready to deploy your first agent?</h3>
+            <h3 className="text-lg font-semibold">
+              Ready to bring your service business online?
+            </h3>
             <p className="mt-1 text-sm opacity-80">
-              Launch pricing: <span className="font-medium">$497 setup</span> +{" "}
-              <span className="font-medium">$297/mo</span>. 14-day refund on the first month.
+              Free website audit. Starting at <span className="font-medium">$750</span>.
+              Add a Replicant assistant when you’re ready.
             </p>
           </div>
 
           <div className="flex gap-3">
             <a
-              href={STRIPE_LINK}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-700"
+              href="/get-started"
+              className="inline-flex items-center rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium hover:shadow-lg transition"
             >
-              Checkout
+              Get a Free Website Audit
             </a>
             <a
-              href="#get-started"
+              href="#pricing"
               className="inline-flex items-center rounded-lg border border-white/15 px-4 py-2 text-sm font-medium hover:bg-white/10"
             >
-              Book a demo
+              See Packages
             </a>
           </div>
         </div>
