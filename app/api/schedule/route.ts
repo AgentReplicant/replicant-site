@@ -8,7 +8,6 @@ import { google, calendar_v3 } from "googleapis";
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
 const SA_JSON = process.env.GOOGLE_SA_JSON || "";
-const SA_IMPERSONATE = process.env.GOOGLE_SA_IMPERSONATE || "";
 const LEAD_MINUTES = Number(process.env.SLOTS_LEAD_MINUTES || process.env.BOOKING_LEAD_MINUTES || 60);
 
 function isIsoUtcZ(v?: string): v is string {
@@ -22,7 +21,7 @@ function fmtInTz(isoUtcZ: string) {
 async function getCalendar(): Promise<calendar_v3.Calendar> {
   const credentials = JSON.parse(SA_JSON);
   const auth = new google.auth.GoogleAuth({
-    credentials, clientOptions: { subject: SA_IMPERSONATE },
+    credentials,
     scopes: ["https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/calendar.readonly"],
   });
   return google.calendar({ version: "v3", auth }) as calendar_v3.Calendar;

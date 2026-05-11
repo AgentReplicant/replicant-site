@@ -20,7 +20,6 @@ type Rules = {
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
 const SA_JSON = process.env.GOOGLE_SA_JSON || "";
-const SA_SUBJECT = process.env.GOOGLE_SA_IMPERSONATE || "";
 
 // Lead-time (mins) from env with sane fallback + bounds
 const LEAD_MIN_DEFAULT = 60;
@@ -108,15 +107,14 @@ function readRules(): Rules {
   return base;
 }
 function getCalendarClient() {
-  if (!SA_JSON || !SA_SUBJECT)
+  if (!SA_JSON)
     throw new Error(
-      "Service Account not configured. Missing GOOGLE_SA_JSON or GOOGLE_SA_IMPERSONATE."
+      "Service Account not configured. Missing GOOGLE_SA_JSON."
     );
   const creds = JSON.parse(SA_JSON);
   const auth = new google.auth.GoogleAuth({
     credentials: creds,
     scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
-    clientOptions: { subject: SA_SUBJECT },
   });
   return google.calendar({ version: "v3", auth });
 }
