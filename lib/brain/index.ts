@@ -181,8 +181,8 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "human_mode") {
     const chosenMode = (intent as any).mode as "phone" | "video" | "email";
     if (chosenMode === "email") {
-      const t = await say(copy.emailHandoff, ctx);
-      return { type: "text", text: t };
+      // Skip tone-smoothing — we need the exact phrase to trigger email_handoff state in widget
+      return { type: "text", text: copy.emailHandoff };
     }
     if (chosenMode === "phone") {
       const t = await say("Phone works. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);

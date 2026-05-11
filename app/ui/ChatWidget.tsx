@@ -365,7 +365,8 @@ export default function ChatWidget() {
       appendBot(data.text);
 
       // If the brain just offered the email handoff prompt, enter email_handoff pending state
-      if (/best email to reach you at/i.test(data.text)) {
+      // Match multiple phrasings since LLM tone-smoothing rewrites the copy
+      if (/best email (?:address )?to reach you/i.test(data.text) || /email (?:address )?(?:works?|for|to (?:reach|contact|follow))/i.test(data.text)) {
         setPending("email_handoff");
       }
       return;
