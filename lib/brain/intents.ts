@@ -10,6 +10,7 @@ export type Intent =
   | { kind: "human_mode"; mode: "phone" | "video" | "email" }
   | { kind: "audit" }
   | { kind: "what_is" }
+  | { kind: "identity" }
   | { kind: "category"; category: "beauty" | "wellness" | "home_trade" | "overview" }
   | { kind: "assistant_info" }
   | { kind: "capability" }
@@ -33,9 +34,13 @@ const HUMAN_MODE_PHONE_RE = /^(?:phone|call|phone call)$/i;
 const HUMAN_MODE_VIDEO_RE = /^(?:google ?meet|meet|video call|video)$/i;
 const HUMAN_MODE_EMAIL_RE = /^(?:email|e-mail|email me|just email)$/i;
 
-// "What is Replicant" / who are you / what do you do
+// "What is Replicant" / what do you do — about the COMPANY
 const WHAT_IS_RE =
-  /\b(what (?:is|are|does) (?:replicant|this|you|it|your (?:company|service|business))|who are you|tell me about (?:replicant|you|your (?:company|service|business))|what do you do|what does replicant do)\b/i;
+  /\b(what (?:is|are|does) (?:replicant|this|your (?:company|service|business))|tell me about (?:replicant|your (?:company|service|business))|what do you do|what does replicant do)\b/i;
+
+// "Are you AI / a bot / a human / a person" — about the ASSISTANT
+const IDENTITY_RE =
+  /\b(are you (?:an? )?(?:ai|bot|robot|human|person|real|chatbot)|is this (?:an? )?(?:ai|bot|chatbot|human)|am i (?:talking|speaking) (?:to|with) (?:an? )?(?:ai|bot|human|person|real)|who are you|what are you)\b/i;
 
 // Audit intent
 const AUDIT_RE =
@@ -95,7 +100,10 @@ export function detectIntent(text: string): Intent {
   // Money & checkout
   if (/\b(checkout|pay( now)?|buy)\b/.test(low)) return { kind: "pay" };
 
-  // "What is Replicant?" / who are you
+  // Identity check ("are you AI?", "who are you?") — must come BEFORE WHAT_IS_RE
+  if (IDENTITY_RE.test(low)) return { kind: "identity" };
+
+  // "What is Replicant?" / what does Replicant do
   if (WHAT_IS_RE.test(low)) return { kind: "what_is" };
 
   // Audit intent

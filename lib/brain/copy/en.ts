@@ -10,14 +10,18 @@
 export const copy = {
   // ---------- Greetings ----------
   greetFirstTime: [
-    "Hi — I'm the Replicant assistant. We build professional websites for service businesses. What kind of business do you run?",
-    "Hey — welcome to Replicant. We build websites for service businesses (beauty, wellness, home & trade). Want to walk through what we do, or jump straight to a free audit?",
-    "Hi — Replicant assistant here. We build websites for service businesses with optional assistant upgrades. What brought you in today?",
+    "Hi, I'm Riley — Replicant's site assistant. I can explain website packages, help you choose the right fit, answer questions, or start your free website audit.",
+    "Hey — Riley here, Replicant's site assistant. We build websites for service businesses (beauty, wellness, home & trade). Want a walkthrough, or to jump straight to a free audit?",
+    "Hi, I'm Riley — Replicant's site assistant. What kind of business do you run?",
   ],
   greetReturning: [
-    "Welcome back. Want to keep going where we left off, or start fresh?",
-    "Good to see you again. Happy to answer more questions or get you set up with a free website audit.",
+    "Welcome back — Riley here. Want to keep going where we left off, or start fresh?",
+    "Good to see you again. Happy to answer more questions or get your free website audit started.",
   ],
+
+  // ---------- Identity (when asked "are you AI?", "are you a person?", etc.) ----------
+  identity:
+    "I'm Riley, Replicant's site assistant — built to answer questions, explain services, and collect details for website audits. If you need a person, I can route you to Marlon.",
 
   // ---------- "What is Replicant?" (canonical) ----------
   whatIsReplicant:
