@@ -53,11 +53,11 @@ const PRICING_ASSISTANT_RE = /\b(assistant|site \+ assistant|with (?:an? )?assis
 
 // Category questions
 const CAT_BEAUTY_RE =
-  /\b(barber|barbershop|salon|hair|beauty|braider|braids?|nails?|nail tech|lash|lashes|eyebrow|brows?|wax(?:ing)?|makeup|stylist|cosmetolog)\b/i;
+  /\b(barber\w*|salon\w*|hair\w*|beauty|braider\w*|braids?|nails?|nail tech|lash\w*|eyebrow\w*|brows?|wax\w*|makeup|stylist\w*|cosmetolog\w*|hairdress\w*)\b/i;
 const CAT_WELLNESS_RE =
-  /\b(med ?spa|spa|massage|esthetic|aesthetic|wellness|fitness|trainer|gym|yoga|pilates|coach|coaching|chiropract|acupunctur|therap(?:y|ist)|nutrition)\b/i;
+  /\b(med ?spa\w*|spa\w*|massage\w*|esthetic\w*|aesthetic\w*|wellness|fitness|trainer\w*|gym\w*|yoga|pilates|coach\w*|chiropract\w*|acupunctur\w*|therap\w*|nutrition\w*|dietit\w*)\b/i;
 const CAT_HOME_TRADE_RE =
-  /\b(lawn ?care|landscap|plumb|hvac|electric(?:al|ian)|pressure wash|handyman|contractor|construct|clean(?:ing|er)|roof|paint|fence|gutter|pest|movers?|moving|detail(?:ing|er)|locksmith|tow|carpet|tree (?:service|removal))\b/i;
+  /\b(lawn ?care|landscap\w*|plumb\w*|hvac|electric(?:al|ian)?|pressure ?wash\w*|handy\w*|contractor\w*|construct\w*|clean\w*|roof\w*|paint\w*|fenc\w*|gutter\w*|pest\s?control|mover\w*|moving|detail\w*|locksmith\w*|tow\w*|carpet\w*|tree (?:service|removal|trim\w*))\b/i;
 const CAT_OVERVIEW_RE =
   /\b(categor(?:y|ies)|industries|verticals?|types? of business|who (?:do you|is this) for|what (?:kind|type) of business)\b/i;
 
