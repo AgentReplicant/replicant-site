@@ -17,7 +17,7 @@
   - Category regex fixed for full word forms (plumber, hairstylist, etc.)
   - Public rename: Rugged Local Services → Home & Trade Services
   - Chat lead source updated to `Chat - Replicant` / `Chat - Email Handoff`
-
+  - Phase 2.1 — Named assistant "Riley", added identity-question handler ("are you AI?")
 ---
 
 ## Open / Nice-to-have
