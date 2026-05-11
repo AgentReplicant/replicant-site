@@ -20,8 +20,8 @@ const categories = [
   },
   {
     icon: Wrench,
-    title: "Rugged Local Services",
-    desc: "For lawncare, plumbing, pressure washing, handyman work, contractors, cleaning, and other local services that need calls and quote requests.",
+    title: "Home & Trade Services",
+    desc: "For lawncare, landscaping, plumbing, pressure washing, handyman, HVAC, cleaning, contractors, and mobile detailing — local services that need calls and quote requests.",
     cta: "Build My Quote Site",
   },
 ];

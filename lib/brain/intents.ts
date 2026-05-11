@@ -4,42 +4,66 @@ import type { DateFilter } from "./types";
 export type Intent =
   | { kind: "book" }
   | { kind: "day"; word: string; partOfDay?: "morning" | "afternoon" | "evening" }
-  | { kind: "pricing" }
+  | { kind: "pricing"; tier?: "starter" | "booking" | "assistant" | "overview" }
   | { kind: "pay" }
   | { kind: "human" }
-  | { kind: "human_mode"; mode: "phone" | "video" }
+  | { kind: "human_mode"; mode: "phone" | "video" | "email" }
+  | { kind: "audit" }
+  | { kind: "what_is" }
+  | { kind: "category"; category: "beauty" | "wellness" | "home_trade" | "overview" }
+  | { kind: "assistant_info" }
   | { kind: "capability" }
   | { kind: "fallback" };
 
 const DAY_WORD =
-  /(?:\b|^)(today|tmrw|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i;        
+  /(?:\b|^)(today|tmrw|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i;
 
 const MORNING = /\bmorning\b/i;
 const AFTERNOON = /\bafternoon\b/i;
 const EVENING = /\bevening|night\b/i;
 
-// Loose time phrases like "10am", "around 6", "6:30 pm"
 const CLOCK_RE = /(around|about|after|before|by)?\s*\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i;
 
-// Expanded human intent — catches "talk to someone", "speak to someone", etc.
+// Human intent — wants to talk to a person
 const HUMAN_RE =
-  /\b(talk to (a )?(human|person|someone|rep|agent)|speak to (a )?(human|person|someone|rep|agent)|human support|can i talk to|can i speak to)\b/i;
+  /\b(talk to (a )?(human|person|someone|rep|agent|marlon)|speak to (a )?(human|person|someone|rep|agent|marlon)|human support|can i talk to|can i speak to|i want to talk|need to speak)\b/i;
 
-// Short standalone mode replies — "phone", "call", "meet", "video" as full input only
-const HUMAN_MODE_RE =
-  /^(?:phone|call|phone call)$/i;
-const VIDEO_MODE_RE =
-  /^(?:google ?meet|meet|video call|video)$/i;
+// Short standalone mode replies — "phone" / "meet" / "email" as full input
+const HUMAN_MODE_PHONE_RE = /^(?:phone|call|phone call)$/i;
+const HUMAN_MODE_VIDEO_RE = /^(?:google ?meet|meet|video call|video)$/i;
+const HUMAN_MODE_EMAIL_RE = /^(?:email|e-mail|email me|just email)$/i;
 
-// "Explain/info" / benefits / product-questions that should be CAPABILITY
-const INFO_RE =
-  /\b(info|information|details?|explain|explanation|how (?:does|do) (?:it|this|that) work|how it works|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|help (?:my|our) (?:business|shop|company)|features?|capabilit(?:y|ies)|why|for what)\b/i;
+// "What is Replicant" / who are you / what do you do
+const WHAT_IS_RE =
+  /\b(what (?:is|are|does) (?:replicant|this|you|it|your (?:company|service|business))|who are you|tell me about (?:replicant|you|your (?:company|service|business))|what do you do|what does replicant do)\b/i;
 
-// Capability / use-case / integration triggers
+// Audit intent
+const AUDIT_RE =
+  /\b(audit|free audit|website audit|review my (?:site|website)|look at my (?:site|website))\b/i;
+
+// Assistant upgrade intent
+const ASSISTANT_RE =
+  /\b(assistant|ai assistant|chatbot|ai upgrade|automation|automated|add-on|addon)\b/i;
+
+// Pricing — overview and specific tiers
+const PRICING_RE = /\b(price|pricing|cost|how much|fee|fees|rates?|charge)\b/i;
+const PRICING_STARTER_RE = /\b(starter|cheap(?:est)?|basic|simple|just (?:a )?site)\b/i;
+const PRICING_BOOKING_RE = /\b(booking|quote|middle|recommended)\b/i;
+const PRICING_ASSISTANT_RE = /\b(assistant|site \+ assistant|with (?:an? )?assistant)\b/i;
+
+// Category questions
+const CAT_BEAUTY_RE =
+  /\b(barber|barbershop|salon|hair|beauty|braider|braids?|nails?|nail tech|lash|lashes|eyebrow|brows?|wax(?:ing)?|makeup|stylist|cosmetolog)\b/i;
+const CAT_WELLNESS_RE =
+  /\b(med ?spa|spa|massage|esthetic|aesthetic|wellness|fitness|trainer|gym|yoga|pilates|coach|coaching|chiropract|acupunctur|therap(?:y|ist)|nutrition)\b/i;
+const CAT_HOME_TRADE_RE =
+  /\b(lawn ?care|landscap|plumb|hvac|electric(?:al|ian)|pressure wash|handyman|contractor|construct|clean(?:ing|er)|roof|paint|fence|gutter|pest|movers?|moving|detail(?:ing|er)|locksmith|tow|carpet|tree (?:service|removal))\b/i;
+const CAT_OVERVIEW_RE =
+  /\b(categor(?:y|ies)|industries|verticals?|types? of business|who (?:do you|is this) for|what (?:kind|type) of business)\b/i;
+
+// Capability fallback — generic "can it / does it / how does it work"
 const CAPABILITY_RE =
-  /\b(can it|is it possible|does it|do you|support|handle|integrate|work with)\b/i;
-const VERTICAL_CHANNELS_RE =
-  /\b(appointments?|booking|sales|support|instagram|whatsapp|sms|dms?)\b/i;
+  /\b(can it|is it possible|does it|do you|support|handle|integrate|work with|how (?:does|do) (?:it|this|that) work|how it works|features?|capabilit(?:y|ies))\b/i;
 
 function clockToPartOfDay(text: string): "morning" | "afternoon" | "evening" | undefined {
   const m = text.toLowerCase().match(CLOCK_RE);
@@ -63,55 +87,69 @@ export function detectIntent(text: string): Intent {
   if (!t) return { kind: "fallback" };
   const low = t.toLowerCase();
 
-  // Money & checkout
-  if (/\b(checkout|pay( now)?|buy|sign ?up)\b/.test(low)) return { kind: "pay" };
-  if (/\b(price|pricing|cost)\b/.test(low)) return { kind: "pricing" };
+  // Short mode replies (must come BEFORE other checks because they're standalone words)
+  if (HUMAN_MODE_PHONE_RE.test(t)) return { kind: "human_mode", mode: "phone" };
+  if (HUMAN_MODE_VIDEO_RE.test(t)) return { kind: "human_mode", mode: "video" };
+  if (HUMAN_MODE_EMAIL_RE.test(t)) return { kind: "human_mode", mode: "email" };
 
-  // Human handoff / preference (full phrases)
+  // Money & checkout
+  if (/\b(checkout|pay( now)?|buy)\b/.test(low)) return { kind: "pay" };
+
+  // "What is Replicant?" / who are you
+  if (WHAT_IS_RE.test(low)) return { kind: "what_is" };
+
+  // Audit intent
+  if (AUDIT_RE.test(low)) return { kind: "audit" };
+
+  // Categories — specific business types
+  if (CAT_BEAUTY_RE.test(low)) return { kind: "category", category: "beauty" };
+  if (CAT_WELLNESS_RE.test(low)) return { kind: "category", category: "wellness" };
+  if (CAT_HOME_TRADE_RE.test(low)) return { kind: "category", category: "home_trade" };
+  if (CAT_OVERVIEW_RE.test(low)) return { kind: "category", category: "overview" };
+
+  // Human handoff request
   if (HUMAN_RE.test(low)) return { kind: "human" };
 
-  // Short mode replies — "phone", "call", "meet", "video" as standalone answers
-  if (HUMAN_MODE_RE.test(t)) return { kind: "human_mode", mode: "phone" };
-  if (VIDEO_MODE_RE.test(t)) return { kind: "human_mode", mode: "video" };
+  // Pricing — try to detect specific tier first, fall back to overview
+  if (PRICING_RE.test(low)) {
+    if (PRICING_ASSISTANT_RE.test(low)) return { kind: "pricing", tier: "assistant" };
+    if (PRICING_STARTER_RE.test(low)) return { kind: "pricing", tier: "starter" };
+    if (PRICING_BOOKING_RE.test(low)) return { kind: "pricing", tier: "booking" };
+    return { kind: "pricing", tier: "overview" };
+  }
 
-  // Direct information/benefits/product questions → capability
-  if (INFO_RE.test(low)) return { kind: "capability" };
+  // Assistant / add-on questions (not pricing)
+  if (ASSISTANT_RE.test(low)) return { kind: "assistant_info" };
 
-  // Scheduling / availability
+  // Scheduling / availability — only when user explicitly mentions booking/calls
   if (
     /\b(book|schedule|set up|hop on)\b.*\b(call|meeting|meet|phone)\b/.test(low) ||
     /\b(available|availability|times?|time slots?|slots?)\b/.test(low) ||
-    CLOCK_RE.test(low)
+    (CLOCK_RE.test(low) && /\b(call|meet|talk)\b/.test(low))
   ) {
     return { kind: "book" };
   }
 
-  // Day + part-of-day via words or clock time
+  // Day + part-of-day
   const dayHit = low.match(DAY_WORD);
   const byWords =
     MORNING.test(low) ? "morning" :
     AFTERNOON.test(low) ? "afternoon" :
     EVENING.test(low) ? "evening" : undefined;
-
   const byClock = clockToPartOfDay(low);
 
   if (dayHit) {
     const pod = byWords || byClock;
     return { kind: "day", word: dayHit[1], partOfDay: pod };
   }
-
-  // Part-of-day alone → cross-day search
   if (byWords) return { kind: "day", word: "part-of-day", partOfDay: byWords as any };
 
-  // Capability / use-case / integrations
-  if (CAPABILITY_RE.test(low) || VERTICAL_CHANNELS_RE.test(low)) {
-    return { kind: "capability" };
-  }
+  // Generic capability questions — fall through to website-first explanation
+  if (CAPABILITY_RE.test(low)) return { kind: "capability" };
 
   return { kind: "fallback" };
 }
 
-// Reserved for later server-side day resolution.
 export function toDateFilterFromWord(_word: string, _tz = "America/New_York"): DateFilter | null {
   return null;
 }

@@ -1,99 +1,92 @@
 // lib/brain/copy/en.ts
 
-export type PersonaId = "alex" | "riley" | "jordan" | "sora";
-
-export const personas: Record<
-  PersonaId,
-  {
-    role: "sales" | "support";
-    style: string;
-    greetFirstTime: string[];
-    greetReturning: string[];
-  }
-> = {
-  alex: {
-    role: "sales",
-    style: "Professional, warm",
-    greetFirstTime: [
-      "Hi — Alex with Replicant. I can walk you through how it works or get you set up. What are you hoping to automate first?",
-      "Hello — Alex here from Replicant. Tell me your goal and I'll point you to the fastest path.",
-    ],
-    greetReturning: [
-      "Welcome back — want to pick up where we left off or look at times again?",
-      "Good to see you again. Phone or Google Meet this time?",
-    ],
-  },
-  riley: {
-    role: "sales",
-    style: "Friendly, energetic",
-    greetFirstTime: [
-      "Hey! I'm Riley with Replicant. Curious about sales, booking, or support? I can help with all three.",
-      "Hi — Riley here. Want a quick rundown or should we jump straight to setup?",
-    ],
-    greetReturning: [
-      "Nice to see you again! Ready to continue or grab a quick time?",
-    ],
-  },
-  jordan: {
-    role: "sales",
-    style: "Direct, ROI-driven",
-    greetFirstTime: [
-      "Hi — Jordan at Replicant. Share your goal and timeline and I'll map the quickest path.",
-      "Hello — Jordan from Replicant. If you want to move today, I can walk you through it in minutes.",
-    ],
-    greetReturning: [
-      "Welcome back. Do you want a phone call, a Meet, or to finish setup?",
-    ],
-  },
-  sora: {
-    role: "support",
-    style: "Helpful, calm",
-    greetFirstTime: [
-      "Hello — Sora from Replicant. Happy to help with questions or booking. Where should we start?",
-      "Hi — Sora here. Would you like a quick overview or details on your use case?",
-    ],
-    greetReturning: [
-      "Welcome back. Want to keep going from last time or see new times?",
-    ],
-  },
-};
+/**
+ * Single official Replicant voice.
+ * Tone: clear, professional, consultative, website-first.
+ * Calls are an escalation path, not the default.
+ * No AI-agent-company positioning. Replicant = professional websites for service businesses.
+ */
 
 export const copy = {
-  // Neutral / shared
-  askDay: "Which day works for you? (Times are shown in Eastern Time.)",
+  // ---------- Greetings ----------
+  greetFirstTime: [
+    "Hi — I'm the Replicant assistant. We build professional websites for service businesses. What kind of business do you run?",
+    "Hey — welcome to Replicant. We build websites for service businesses (beauty, wellness, home & trade). Want to walk through what we do, or jump straight to a free audit?",
+    "Hi — Replicant assistant here. We build websites for service businesses with optional assistant upgrades. What brought you in today?",
+  ],
+  greetReturning: [
+    "Welcome back. Want to keep going where we left off, or start fresh?",
+    "Good to see you again. Happy to answer more questions or get you set up with a free website audit.",
+  ],
+
+  // ---------- "What is Replicant?" (canonical) ----------
+  whatIsReplicant:
+    "Replicant builds professional websites for service businesses, with upcoming assistant upgrades that can answer customer questions, capture leads, and help people book, call, or request quotes.",
+
+  // ---------- Service categories ----------
+  categoriesOverview:
+    "We build for three kinds of service businesses: Beauty & Grooming (barbers, salons, lash, nails), Wellness & Aesthetics (med spas, massage, fitness, coaches), and Home & Trade Services (lawncare, plumbing, pressure washing, HVAC, contractors, cleaning).",
+
+  categoryBeauty:
+    "For beauty & grooming — barbers, braiders, salons, lash techs, nail techs — we build sites with clean service menus, photos, reviews, and a booking flow that links to your existing booking platform (Booksy, Square, Vagaro, etc.).",
+
+  categoryWellness:
+    "For wellness & aesthetics — med spas, massage, fitness, coaching — we build sites focused on trust and qualified consultations, with clear service descriptions, social proof, and consultation request flows.",
+
+  categoryHomeTrade:
+    "For home & trade services — lawncare, plumbing, pressure washing, handyman, HVAC, cleaning, contractors — we build sites focused on calls and quote requests, with clear service areas, photos of past work, and a fast contact path.",
+
+  // ---------- Pricing (websites, starting-at) ----------
+  pricingOverview:
+    "Pricing starts at $750 for a Starter Site, $1,250 for a Booking or Quote Site (with platform integration and reviews), or $2,000 setup + monthly support for a Site + Assistant package. Final scope depends on your business and content — that's what the free audit confirms.",
+
+  pricingStarter:
+    "Starter Site starts at $750. Mobile-first website, services section, photos, contact form, booking or quote CTA, and basic SEO. Good fit for businesses that just need a clean online presence.",
+
+  pricingBookingQuote:
+    "Booking / Quote Site starts at $1,250. Everything in Starter, plus booking platform or quote form integration, reviews, Google Maps / location, and analytics. Best fit for most service businesses.",
+
+  pricingSiteAssistant:
+    "Site + Assistant starts at $2,000 setup plus monthly support. Full website plus a Replicant assistant trained on your FAQs, services, and booking flow. The assistant is in development — current sites can be upgraded once it's live.",
+
+  // ---------- Audit ----------
+  auditPitch:
+    "The free website audit is the easiest place to start. Tell us about your business and what you want more of (bookings, calls, quotes), and we'll send back an honest take on what we'd improve.",
+  auditLink:
+    "You can request a free audit at /website-audit — takes about 3 minutes.",
+
+  // ---------- Assistant upgrade (positioned as upcoming) ----------
+  assistantStatus:
+    "Replicant assistants are in development as an upgrade for websites. They're designed to answer questions, capture leads, and help customers book, call, or request quotes. If you're interested in being an early adopter, /get-started is the right place to register interest.",
+
+  // ---------- Human handoff (now offers email as a third option) ----------
+  humanOffer:
+    "Happy to connect you with a real person. Would you prefer phone, Google Meet, or email?",
+  emailHandoff:
+    "Got it — email works. What's the best email to reach you at, and a quick note on what you'd like to discuss?",
+  emailReceived:
+    "Thanks — I'll make sure someone follows up by email within one business day.",
+
+  // ---------- Scheduling (for when user explicitly asks for a call/Meet) ----------
+  askDay: "What day works for you? (Times are shown in Eastern Time.)",
   pickTime: "Here are a few times (ET):",
   bookedOk: (when?: string) => `All set${when ? ` — ${when}` : ""}.`,
-  linkIntro: "Here's a secure link:",
   slotTaken:
-    "Sorry — that time is unavailable. Here are some nearby options that day:",
+    "That time just filled. Here are some nearby options that day:",
   dayFull: (label: string) =>
-    `Sorry — ${label} is fully booked. The next available is:`,
+    `${label} is fully booked. The next available is:`,
+  askEmail: "What's the best email for the calendar invite?",
 
-  // Pricing & value
-  pricingNudge:
-    "Launch pricing is $497 setup + $297/mo with a 14-day refund on the first month. Cancel any time after.",
-  valueCompare:
-    "Compared to staffing coverage, most teams find the ROI straightforward — this replaces after-hours and quick response needs.",
+  // ---------- Soft routing CTAs ----------
+  routeToAudit:
+    "If you'd like, you can request a free audit at /website-audit and I'll make sure it gets reviewed.",
+  routeToGetStarted:
+    "If you want to register interest in the assistant upgrade, /get-started is the right place.",
 
-  // Human call
-  humanOffer:
-    "I can set up a quick call — phone or Google Meet. What's better for you?",
-  zoomUnavailable:
-    "We default to Google Meet or phone. Zoom isn't available right now.",
-  askEmail: "What's the best email for the invite?",
+  // ---------- Generic fallback (never pushy) ----------
+  softFallback:
+    "I can explain what Replicant does, walk you through our packages, or help you start a free website audit. What would be most useful?",
 
-  // Sales-first capability answers (referenced by brain/index.ts)
-  capabilityBooking:
-    "Yes — Replicant can take messages from your site, Instagram DMs, WhatsApp, or SMS and book straight into your calendar. It confirms details, checks real availability, and sends the invite. If you prefer phone calls instead of Meet, we can do that too.",
-  capabilitySales:
-    "Our sales agent qualifies for intent, timing, and budget, answers objections, and offers checkout when the buyer is ready. Tough cases hand off to a human cleanly.",
-  capabilitySupport:
-    "Our support agent answers FAQs in your brand voice, asks clarifying questions when needed, and escalates to a human for edge cases. You get transcripts and contact info.",
-  capabilityFollowup:
-    "If you'd like, I can drop the checkout link so you can get started, or we can grab a quick time to talk through your setup.",
-
-  channelsShort:
-    "Channels today: web. Rolling out Instagram, WhatsApp, and SMS next.",
-  salesNudge:
-    "Want to go ahead and set it up now, or see a couple of quick call times?",
+  // ---------- Misc ----------
+  linkIntro: "Here's the link:",
 };

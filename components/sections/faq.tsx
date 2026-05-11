@@ -12,8 +12,8 @@ const faqs = [
     a: "Yes. For service businesses that price per job — lawncare, plumbing, pressure washing, contractors — we build a clean quote request flow on the site.",
   },
   {
-    q: "Can you work with rugged local service businesses?",
-    a: "Absolutely. Lawncare, plumbing, handyman work, cleaning, pressure washing, contractors — we build sites focused on calls and quote requests, not just looking pretty.",
+   q: "Can you work with home & trade service businesses?",
+    a: "Absolutely. Lawncare, plumbing, handyman work, cleaning, pressure washing, HVAC, contractors — we build sites focused on calls and quote requests, not just looking pretty.",
   },
   {
     q: "What is the Replicant assistant?",

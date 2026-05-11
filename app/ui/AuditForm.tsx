@@ -8,7 +8,7 @@ type State = "idle" | "loading" | "success" | "error";
 const CATEGORIES = [
   "Beauty & Grooming",
   "Wellness & Aesthetics",
-  "Rugged Local Services",
+  "Home & Trade Services",
   "Other",
 ];
 

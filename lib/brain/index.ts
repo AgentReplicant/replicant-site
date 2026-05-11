@@ -1,7 +1,7 @@
 // lib/brain/index.ts
 import { detectIntent } from "./intents";
-import { copy, personas, PersonaId } from "./copy/en";
-import { getSlots, bookSlot, getCheckoutLink } from "./actions";
+import { copy } from "./copy/en";
+import { getSlots, bookSlot } from "./actions";
 import type { BrainCtx, BrainResult, Slot } from "./types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
@@ -12,17 +12,8 @@ const POD: Record<"morning" | "afternoon" | "evening", [number, number]> = {
 };
 
 /* ---------- Helpers ---------- */
-const personasList: PersonaId[] = ["alex", "riley", "jordan", "sora"];
-
 function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function pickPersona(ctx: BrainCtx): PersonaId {
-  const s = (ctx.sessionId || "") + "|p5";
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return personasList[Math.abs(h) % personasList.length];
 }
 
 function minsFromLabel(slot: Slot): number | null {
@@ -53,7 +44,6 @@ function phraseForSlots(slots: Slot[], capPerDay = 3): string {
   if (!slots.length) return "I'm not seeing anything there.";
   const byDay = new Map<string, string[]>();
   for (const s of slots) {
-    // Labels now look like "Fri, Mar 28 at 4:30 PM ET"
     const atIdx = s.label.indexOf(" at ");
     const day = atIdx !== -1 ? s.label.slice(0, atIdx) : s.label.split(" ")[0];
     const time = atIdx !== -1 ? s.label.slice(atIdx + 4) : s.label;
@@ -73,24 +63,27 @@ function phraseForSlots(slots: Slot[], capPerDay = 3): string {
   return `I can do ${parts.slice(0, -1).join("; ")}, or ${last}.`;
 }
 
-/* ---------- Tone smoothing (optional) ---------- */
-async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
+/* ---------- Optional tone smoothing ---------- */
+async function tone(text: string, _ctx: BrainCtx): Promise<string> {
   if (!process.env.LLM_ENABLED || process.env.LLM_ENABLED === "0" || !process.env.OPENAI_API_KEY) return text;
   try {
     const { default: OpenAI } = await import("openai");
     const client: any = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const system = [
-      `You are ${persona.toUpperCase()} — ${personas[persona].style}.`,
-      "Casual-professional and concise. 1–2 short sentences unless asked to expand.",
-      "Default to phone; use Google Meet only if the user asks. Times are Eastern Time.",
-      "Never invent availability; rely on provided slot data.",
+      "You are the official Replicant site assistant.",
+      "Replicant builds professional websites for service businesses (beauty, wellness, home & trade).",
+      "Replicant assistants are an upcoming optional upgrade for those websites.",
+      "Tone: clear, professional, consultative, helpful. Not pushy, not over-chatty.",
+      "1–2 short sentences unless asked to expand.",
+      "Never describe websites as 'AI-built' or 'AI-generated.' Websites are professional. AI/assistants are an optional upgrade.",
+      "Calls are an escalation path, not the default. Don't push scheduling unless the user asks.",
     ].join(" ");
     const resp = await client.chat.completions.create({
       model: process.env.LLM_MODEL || "gpt-4o-mini",
-      temperature: 0.5,
+      temperature: 0.4,
       messages: [
         { role: "system", content: system },
-        { role: "user", content: `Rewrite naturally in your style:\n---\n${text}\n---` },
+        { role: "user", content: `Rewrite naturally in the Replicant assistant voice:\n---\n${text}\n---` },
       ],
     });
     return resp?.choices?.[0]?.message?.content?.trim() || text;
@@ -99,110 +92,28 @@ async function tone(text: string, ctx: BrainCtx, persona: PersonaId): Promise<st
   }
 }
 
-/* ---------- Theme-aware repeat guard & clarifiers ---------- */
-const ASK_VARIANTS = [
-  "What day works for you—or morning, afternoon, or evening? (ET.)",
-  "Happy to set it up. Do you have a day in mind, or is a window (morning/afternoon/evening) easier? (ET.)",
-  "We can lock it in—pick a day, or just say morning/afternoon/evening. (ET.)",
-];
-
 function norm(s?: string) {
   return (s || "").toLowerCase().replace(/\s+/g, " ").replace(/[.,!?;:()\[\]'"]/g, "").trim();
 }
 
-function looksLikeSchedulingAsk(s: string) {
-  return /\bmorning|afternoon|evening\b/i.test(s) || /\bwhat day works\b/i.test(s);
-}
-
-function looksLikeCapabilityPitch(s: string) {
-  return /\bbooking agents?,? customer support agents?,? and sales agents?\b/i.test(s) || /\bbooking \+ support\b/i.test(s);
-}
-
-function looksLikeClarifier(s: string) {
-  return /\bI might be repeating myself\b/i.test(s) || /\bto book you, I just need\b/i.test(s);
-}
-
-function isInfoRequest(s?: string) {
-  if (!s) return false;
-  return /\b(info|information|details?|explain|how (?:does|do) (?:it|this|that) work|what (?:do you|does (?:it|this|that|replicant)|can (?:it|this|that|replicant)) do|what (?:is|are) (?:it|this|that|replicant)|tell me about (?:it|this|that|replicant)?|benefits?|beneficial|why|for what)\b/i.test(s);
-}
-
-function clarifierForScheduling(ctx: BrainCtx) {
-  const lastUser = (ctx.lastUser || "").trim();
-  if (lastUser) {
-    return `Just to be sure I got you: "${lastUser}". I can explain here, or we can pick a time. If you want to book, I just need a **day** or a **window** (morning/afternoon/evening). (ET.)`;
-  }
-  return "I can explain here, or we can pick a time. To book, I just need a day or a window (morning/afternoon/evening). (ET.)";
-}
-
-function themeOf(s?: string): "schedule" | "capability" | "clarifier" | "other" {
-  if (!s) return "other";
-  if (looksLikeClarifier(s)) return "clarifier";
-  if (looksLikeSchedulingAsk(s)) return "schedule";
-  if (looksLikeCapabilityPitch(s)) return "capability";
-  return "other";
-}
-
-async function say(text: string, ctx: BrainCtx, persona: PersonaId): Promise<string> {
-  const lastTheme = themeOf(ctx.lastAssistant);
-  const nextTheme = themeOf(text);
-  let outgoing = text;
-  if (lastTheme === "schedule" && nextTheme === "schedule") {
-    if (isInfoRequest(ctx.lastUser)) {
-      outgoing = "Happy to explain here. Quick overview in two lines, then we can book if you want.";
-    } else {
-      outgoing = clarifierForScheduling(ctx);
-    }
-  }
-  const t = await tone(outgoing, ctx, persona);
+async function say(text: string, ctx: BrainCtx): Promise<string> {
+  const t = await tone(text, ctx);
+  // If we'd repeat ourselves verbatim, fall back to soft alternative
   if (norm(t) === norm(ctx.lastAssistant)) {
-    const c = clarifierForScheduling(ctx);
-    return (await tone(c, ctx, persona)) || c;
+    return await tone(copy.softFallback, ctx);
   }
   return t;
 }
 
-/* ---------- Short vertical explainer ---------- */
-function quickExplainer(userText?: string): string {
-  const t = (userText || "").toLowerCase();
-  if (/\b(barber|barbershop|salon|hair|beard)\b/.test(t)) {
-    return "We set up a booking agent + support agent for your shop: it handles service selection (cut/color/beard), durations, live availability, reschedules, and FAQs like hours, parking, and policies. Instagram/WhatsApp chats can flow straight to your calendar.";
-  }
-  return "We configure a booking agent + support agent for you. It qualifies and books from your website/IG/WhatsApp/SMS into your Google Calendar, answers FAQs in your voice, and can nudge for payments when needed.";
-}
-
-/* ---------- Capability sub-topic detection ---------- */
-function pickCapabilityCopy(userText?: string): string {
-  const t = (userText || "").toLowerCase();
-
-  if (/\b(book|booking|appointments?|schedul|calendar)\b/.test(t)) {
-    return `${copy.capabilityBooking} ${copy.capabilityFollowup}`;
-  }
-  if (/\b(sales?|sell|leads?|qualify|checkout|close)\b/.test(t)) {
-    return `${copy.capabilitySales} ${copy.capabilityFollowup}`;
-  }
-  if (/\b(support|faq|help desk|customer service|questions)\b/.test(t)) {
-    return `${copy.capabilitySupport} ${copy.capabilityFollowup}`;
-  }
-
-  const overview = quickExplainer(userText);
-  return `${overview} ${copy.capabilityFollowup}`;
-}
-
-/* ---------- Detect if last assistant message was the human-offer ---------- */
-function lastWasHumanOffer(ctx: BrainCtx): boolean {
-  if (!ctx.lastAssistant) return false;
-  const n = norm(ctx.lastAssistant);
-  return /phone or google meet/i.test(n) || /phone or meet/i.test(n) || /what.?s better for you/i.test(n);
-}
+/* ---------- Email validation for handoff ---------- */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 /* ---------- Brain ---------- */
 export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResult> {
-  const persona = pickPersona(ctx);
   const intent = detectIntent(typeof input?.message === "string" ? input.message : "");
   const kind: string = (intent as any)?.kind;
 
-  /* Final booking (client passes pickSlot) */
+  /* ---------- Final booking (client passes pickSlot) — preserved ---------- */
   if (input?.pickSlot) {
     const { start, end, email, mode, phone } = input.pickSlot || {};
     if (!start || !end || !email)
@@ -215,66 +126,93 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         summary: "Replicant — Intro Call",
         description: mode === "phone"
           ? `Phone call. We will call: ${phone || "(number not provided)"}.`
-          : "Auto-booked from chat. Times shown/scheduled in ET.",
+          : "Auto-booked from Replicant site chat. Times in ET.",
       });
-      const t = await say("All set — calendar invite sent.", ctx, persona);
       return { type: "booked", when: r.when, meetLink: r.meetLink };
     } catch {
       return { type: "error", text: "Couldn't book that time — want to try another?" };
     }
   }
 
-  /* Checkout / Pricing */
-  if (kind === "pay") {
-    try {
-      const { url } = getCheckoutLink();
-      const t = await say("Here's a secure checkout link for you:", ctx, persona);
-      return { type: "action", action: "open_url", url, text: t };
-    } catch {
-      return { type: "error", text: "Checkout isn't available yet." };
-    }
+  /* ---------- "What is Replicant?" ---------- */
+  if (kind === "what_is") {
+    const t = await say(`${copy.whatIsReplicant} ${copy.routeToAudit}`, ctx);
+    return { type: "text", text: t };
   }
 
+  /* ---------- Categories ---------- */
+  if (kind === "category") {
+    const cat = (intent as any).category as "beauty" | "wellness" | "home_trade" | "overview";
+    let text: string;
+    if (cat === "beauty") text = `${copy.categoryBeauty} ${copy.routeToAudit}`;
+    else if (cat === "wellness") text = `${copy.categoryWellness} ${copy.routeToAudit}`;
+    else if (cat === "home_trade") text = `${copy.categoryHomeTrade} ${copy.routeToAudit}`;
+    else text = `${copy.categoriesOverview} Which one fits your business?`;
+    const t = await say(text, ctx);
+    return { type: "text", text: t };
+  }
+
+  /* ---------- Pricing ---------- */
   if (kind === "pricing") {
-    const t = await say(`${copy.pricingNudge} ${copy.valueCompare}`, ctx, persona);
+    const tier = (intent as any).tier as "starter" | "booking" | "assistant" | "overview" | undefined;
+    let text: string;
+    if (tier === "starter") text = `${copy.pricingStarter} ${copy.routeToAudit}`;
+    else if (tier === "booking") text = `${copy.pricingBookingQuote} ${copy.routeToAudit}`;
+    else if (tier === "assistant") text = `${copy.pricingSiteAssistant} ${copy.routeToGetStarted}`;
+    else text = `${copy.pricingOverview} ${copy.routeToAudit}`;
+    const t = await say(text, ctx);
     return { type: "text", text: t };
   }
 
-  /* Human mode reply — user said "phone" or "meet" after we offered the choice */
+  /* ---------- Audit intent ---------- */
+  if (kind === "audit") {
+    const text = `${copy.auditPitch} ${copy.auditLink}`;
+    const t = await say(text, ctx);
+    return { type: "text", text: t };
+  }
+
+  /* ---------- Assistant upgrade interest ---------- */
+  if (kind === "assistant_info") {
+    const t = await say(`${copy.assistantStatus}`, ctx);
+    return { type: "text", text: t };
+  }
+
+  /* ---------- Human mode reply — phone / video / email ---------- */
   if (kind === "human_mode") {
-    const chosenMode = (intent as any).mode as "phone" | "video";
-    if (chosenMode === "phone") {
-      const t = await say("Phone works. What day works for you — or morning, afternoon, or evening? (ET.)", ctx, persona);
-      return { type: "text", text: t };
-    } else {
-      const t = await say("Google Meet it is. What day works for you — or morning, afternoon, or evening? (ET.)", ctx, persona);
+    const chosenMode = (intent as any).mode as "phone" | "video" | "email";
+    if (chosenMode === "email") {
+      const t = await say(copy.emailHandoff, ctx);
       return { type: "text", text: t };
     }
+    if (chosenMode === "phone") {
+      const t = await say("Phone works. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
+      return { type: "text", text: t };
+    }
+    // video
+    const t = await say("Google Meet it is. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
+    return { type: "text", text: t };
   }
 
-  /* Human intent → offer phone vs Meet */
+  /* ---------- Human intent → offer phone / Meet / email ---------- */
   if (kind === "human") {
-    const t = await say(copy.humanOffer, ctx, persona);
+    const t = await say(copy.humanOffer, ctx);
     return { type: "text", text: t };
   }
 
-  /* Capability / info requests — use richer copy based on sub-topic */
-  if (kind === "capability") {
-    const capText = pickCapabilityCopy(typeof input?.message === "string" ? input.message : ctx.lastUser);
-
-    const text = themeOf(ctx.lastAssistant) === "schedule"
-      ? `Here's the quick version:\n${capText}`
-      : capText;
-    const t = await say(text, ctx, persona);
+  /* ---------- Pay (Stripe checkout) — kept but deprioritized ---------- */
+  if (kind === "pay") {
+    // Old Stripe link is for the AI assistant product, which is now in development.
+    // Route to /get-started for interest registration instead.
+    const t = await say(`${copy.assistantStatus}`, ctx);
     return { type: "text", text: t };
   }
 
-  /* Booking logic */
+  /* ---------- Booking logic — preserved, only triggered when user explicitly asks ---------- */
   if (kind === "book" || kind === "day") {
     const pod = (intent as any)?.partOfDay as "morning" | "afternoon" | "evening" | undefined;
 
     if (!ctx.date && !pod) {
-      const t = await say(pick(ASK_VARIANTS), ctx, persona);
+      const t = await say("What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
       return { type: "text", text: t };
     }
 
@@ -289,7 +227,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         const dayWin = filterByPod(dayEnabled, pod);
         if (dayWin.length > 0) {
           const phrase = phraseForSlots(dayWin.slice(0, 3));
-          const t = await say(`${phrase} What works for you?`, ctx, persona);
+          const t = await say(`${phrase} What works for you?`, ctx);
           return { type: "slots", text: t, date: ctx.date, slots: dayWin };
         }
         const cross = await getEnabled(null);
@@ -302,7 +240,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
           const reqDay = dayWord(firstOnDay.start);
           const reqTime = firstOnDay.label.replace(/^... /, "");
           const line = `Next available ${pod} is ${nextDayWord} at ${nextTime} ET. If you prefer ${reqDay}, first opening is ${reqTime} ET.`;
-          const t = await say(`${line} What's better?`, ctx, persona);
+          const t = await say(`${line} What's better?`, ctx);
           return { type: "slots", text: t, date: ctx.date, slots: [earliestWin, firstOnDay] };
         }
         if (firstOnDay) {
@@ -310,11 +248,11 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
           const reqTime = firstOnDay.label.replace(/^... /, "");
           const t = await say(
             `${reqDay} ${pod} is full. First opening that day is ${reqTime} ET. Want that, or should I check another ${pod}?`,
-            ctx, persona
+            ctx
           );
           return { type: "slots", text: t, date: ctx.date, slots: [firstOnDay] };
         }
-        const t = await say("That day looks packed. Should I try the next morning, or another day?", ctx, persona);
+        const t = await say("That day looks packed. Should I try the next morning, or another day?", ctx);
         return { type: "text", text: t };
       }
 
@@ -322,51 +260,46 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
         const enabled = await getEnabled(null);
         const inWin = filterByPod(enabled, pod);
         if (inWin.length === 0) {
-          const t = await say("That window looks full. Want me to check later that day or try another day?", ctx, persona);
+          const t = await say("That window looks full. Want me to check later that day or try another day?", ctx);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(inWin.slice(0, 3));
-        const t = await say(`${phrase} What works for you?`, ctx, persona);
+        const t = await say(`${phrase} What works for you?`, ctx);
         return { type: "slots", text: t, date: null, slots: inWin };
       }
 
       if (ctx.date && !pod) {
         const enabled = await getEnabled(ctx.date);
         if (enabled.length === 0) {
-          const t = await say("I'm not seeing openings that day. Try another day, or give me a time-of-day?", ctx, persona);
+          const t = await say("I'm not seeing openings that day. Try another day, or give me a time-of-day?", ctx);
           return { type: "text", text: t };
         }
         const phrase = phraseForSlots(enabled.slice(0, 4));
-        const t = await say(`${phrase} What works for you?`, ctx, persona);
+        const t = await say(`${phrase} What works for you?`, ctx);
         return { type: "slots", text: t, date: ctx.date, slots: enabled };
       }
 
-      const t = await say(pick(ASK_VARIANTS), ctx, persona);
+      const t = await say("What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
       return { type: "text", text: t };
     } catch {
       return { type: "error", text: "Couldn't fetch times — mind trying again?" };
     }
   }
 
-  /* Greet + directional fallback */
+  /* ---------- Greet on first turn ---------- */
   if (!ctx.historyCount || ctx.historyCount < 1) {
-    const p = personas[pickPersona(ctx)];
-    const t = await say(pick(p.greetFirstTime), ctx, persona);
+    const t = await say(pick(copy.greetFirstTime), ctx);
     return { type: "text", text: t };
   }
 
-  // If user seems to want information, pivot instead of re-asking scheduling.
-  if (isInfoRequest(ctx.lastUser)) {
-    const capText = pickCapabilityCopy(ctx.lastUser);
-    const text = `Here's the quick version:\n${capText}`;
-    const t = await say(text, ctx, persona);
+  /* ---------- Generic capability question — answer with website-first explanation ---------- */
+  if (kind === "capability") {
+    const text = `${copy.whatIsReplicant} ${copy.categoriesOverview} ${copy.routeToAudit}`;
+    const t = await say(text, ctx);
     return { type: "text", text: t };
   }
 
-  // Softened fallback — conversational, not scheduling-pushy
-  const t = await say(
-    "Happy to help. I can explain what Replicant does, answer questions, or help you book a quick call.",
-    ctx, persona
-  );
+  /* ---------- Soft fallback — never call-pushy ---------- */
+  const t = await say(copy.softFallback, ctx);
   return { type: "text", text: t };
 }

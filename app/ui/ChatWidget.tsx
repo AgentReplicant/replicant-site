@@ -8,7 +8,7 @@ type Slot = { start: string; end: string; label: string; disabled?: boolean };
 type Hist = { role: "user" | "assistant"; content: string }[];
 type DateFilter = { y: number; m: number; d: number } | null;
 
-const STORE_KEY = "replicant_chat_v11";
+const STORE_KEY = "replicant_chat_v12";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
 const NAME_RE =
@@ -99,7 +99,7 @@ export default function ChatWidget() {
   const [page, setPage] = useState(0);
   const [lastSlots, setLastSlots] = useState<Slot[] | null>(null);
   const [chosenSlot, setChosenSlot] = useState<Slot | null>(null);
-  const [pending, setPending] = useState<null | "mode" | "phone" | "email">(
+  const [pending, setPending] = useState<null | "mode" | "phone" | "email" | "email_handoff">(
     null
   );
   const [mode, setMode] = useState<"phone" | "video">("phone");
@@ -167,7 +167,6 @@ export default function ChatWidget() {
       setPending(s.pending ?? null);
       setMode(s.mode ?? "phone");
 
-      // FIX #2: Rebuild historyRef from restored messages
       if (restoredMessages.length > 0) {
         historyRef.current = restoredMessages.map((m) => ({
           role: m.role === "user" ? "user" : "assistant",
@@ -209,7 +208,6 @@ export default function ChatWidget() {
   /* Auto-greet — skip if we restored a prior conversation */
   useEffect(() => {
     if (!open || messages.length > 0 || busy) return;
-    // FIX #2b: If messages were restored, historyRef is already populated — skip greet
     if (restoredRef.current) return;
     let stop = false;
     (async () => {
@@ -236,7 +234,7 @@ export default function ChatWidget() {
           sessionId: `${sid}`,
           role,
           message: text,
-          source: "Replicant site",
+          source: "Chat - Replicant",
           pageUrl:
             typeof window !== "undefined" ? window.location.href : "",
         }),
@@ -251,7 +249,6 @@ export default function ChatWidget() {
       const phoneDigits = onlyDigits(phoneMatchRaw || "");
       const nameMatch = (text.match(NAME_RE) || [])[1];
 
-      // FIX #1 (side effect): Capture lead info from user text into state
       if (emailMatch && !email) setEmail(emailMatch);
       if (phoneDigits.length >= 7 && !phone) setPhone(phoneDigits);
       if (nameMatch && !name) setName(nameMatch);
@@ -264,7 +261,7 @@ export default function ChatWidget() {
           name: nameMatch,
           email: emailMatch,
           phone: phoneDigits || undefined,
-          source: "Replicant site",
+          source: "Chat - Replicant",
           status: "Engaged",
         }),
       });
@@ -284,8 +281,6 @@ export default function ChatWidget() {
     void logMessage("assistant", text);
   }
 
-  // FIX #1: Send lead context (email, phone, name) on every brain call
-  // FIX #3: Accept optional pageOverride so callers can pass the correct page
   async function callBrain(payload: any, overrides?: { page?: number; date?: DateFilter }) {
     const usePage = overrides?.page ?? page;
     const useDate = overrides?.date !== undefined ? overrides.date : date;
@@ -310,7 +305,6 @@ export default function ChatWidget() {
     return res.json();
   }
 
-  /** Selector with ±75 min tolerance; skip if input mentions a different window */
   function selectSlotFromUserText(text: string, slots: Slot[]): Slot | null {
     if (/\bmorning|afternoon|evening\b/i.test(text)) return null;
     const loose = parseLooseTime(text);
@@ -334,8 +328,8 @@ export default function ChatWidget() {
     if (data?.email) setEmail(data.email);
 
     if (data?.type === "action" && data.action === "open_url" && data.url) {
-      appendBot(data.text || "Here's a secure link:");
-      appendBot(`👉 ${data.url}`, { link: data.url });
+      appendBot(data.text || "Here's the link:");
+      appendBot(`${data.url}`, { link: data.url });
       return;
     }
 
@@ -347,7 +341,6 @@ export default function ChatWidget() {
       return;
     }
 
-    // FIX #4: Show booking details (when + meetLink) instead of generic message
     if (data?.type === "booked") {
       setLastSlots(null);
       setChosenSlot(null);
@@ -370,6 +363,11 @@ export default function ChatWidget() {
 
     if (data?.type === "text" && data.text) {
       appendBot(data.text);
+
+      // If the brain just offered the email handoff prompt, enter email_handoff pending state
+      if (/best email to reach you at/i.test(data.text)) {
+        setPending("email_handoff");
+      }
       return;
     }
 
@@ -382,9 +380,36 @@ export default function ChatWidget() {
     appendUser(val);
     setInput("");
 
-    // If we have a list and no selection yet
+    // ---------- Email handoff capture ----------
+    if (pending === "email_handoff") {
+      const emailMatch = (val.match(EMAIL_RE) || [])[0];
+      if (!emailMatch) {
+        appendBot("Mind sharing a valid email so we can follow up?");
+        return;
+      }
+      setEmail(emailMatch);
+      setPending(null);
+      // Save the email-handoff lead with a clear source
+      try {
+        await fetch("/api/lead", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name,
+            email: emailMatch,
+            phone,
+            message: `Email handoff requested via chat. Last note: ${val}`,
+            source: "Chat - Email Handoff",
+            status: "Needs Follow-Up",
+          }),
+        });
+      } catch {}
+      appendBot("Thanks — I'll make sure someone follows up by email within one business day.");
+      return;
+    }
+
+    // ---------- If we have a slot list and no selection yet ----------
     if (lastSlots && !chosenSlot) {
-      // FIX #3: "more/next/later" — compute next page, pass it directly
       if (/^(more|next|later)$/i.test(val)) {
         const nextPage = page + 1;
         setPage(nextPage);
@@ -437,7 +462,7 @@ export default function ChatWidget() {
       }
     }
 
-    // Mode follow-up
+    // ---------- Mode follow-up (after slot pick) ----------
     if (pending === "mode") {
       if (/\b(meet|video)\b/i.test(val)) {
         setMode("video");
@@ -452,7 +477,6 @@ export default function ChatWidget() {
     }
 
     if (pending === "phone") {
-      // Allow mode switch if user asks for meet/video instead
       if (/\b(google meet|meet|video)\b/i.test(val)) {
         setMode("video");
         setPending("email");
@@ -498,7 +522,7 @@ export default function ChatWidget() {
       return;
     }
 
-    // If message contains a day word, lock date
+    // ---------- Day word → lock date ----------
     const maybeDay = parseNaturalDay(val);
     if (maybeDay) {
       const now = new Date();
@@ -517,7 +541,7 @@ export default function ChatWidget() {
       return;
     }
 
-    // Otherwise pass to brain
+    // ---------- Otherwise pass to brain ----------
     setBusy(true);
     try {
       const data = await callBrain({ message: val });
@@ -567,7 +591,7 @@ export default function ChatWidget() {
                   className="text-xs text-gray-500 hover:text-black"
                   aria-label="Close chat"
                 >
-                  ✕
+                  Close
                 </button>
               </div>
             </div>
