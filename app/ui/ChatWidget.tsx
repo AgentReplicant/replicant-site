@@ -322,7 +322,6 @@ export default function ChatWidget() {
           email: emailMatch,
           phone: phoneDigits || undefined,
           source: "Chat - Replicant",
-          status: "Engaged",
         }),
       });
     } catch {}

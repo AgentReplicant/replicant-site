@@ -57,19 +57,10 @@ export default function AuditForm() {
 
   const disabled = state === "loading";
 
+  // Free-text Message now only contains the user's open-ended "details" field.
+  // Structured fields are sent as named properties to /api/lead.
   function buildMessage() {
-    const lines: string[] = [];
-    if (businessName) lines.push(`Business Name: ${businessName}`);
-    if (category) lines.push(`Category: ${category}`);
-    if (websiteUrl) lines.push(`Current Website: ${websiteUrl}`);
-    if (socialUrl) lines.push(`Social: ${socialUrl}`);
-    if (bookingPlatform) lines.push(`Booking Platform: ${bookingPlatform}`);
-    if (goal) lines.push(`Main Goal: ${goal}`);
-    if (problem) lines.push(`Main Problem: ${problem}`);
-    if (timeline) lines.push(`Timeline: ${timeline}`);
-    if (budget) lines.push(`Budget: ${budget}`);
-    if (details) lines.push(`\nBusiness Details:\n${details}`);
-    return lines.join("\n");
+    return details.trim();
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -81,11 +72,21 @@ export default function AuditForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
+          businessName,
           email,
           phone,
+          businessCategory: category,
+          currentWebsiteUrl: websiteUrl,
+          socialLink: socialUrl,
+          bookingPlatform,
+          mainGoal: goal,
+          mainProblem: problem,
+          budgetRange: budget,
+          desiredTimeline: timeline,
+          interestType: "Website",
           message: buildMessage(),
           source: "Website Audit",
-          status: "Audit Request",
+          status: "Audit Requested",
         }),
       });
       if (!res.ok) throw new Error("Bad response");

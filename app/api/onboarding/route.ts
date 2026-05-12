@@ -71,24 +71,21 @@ async function updateLead(id: string, fields: any) {
 }
 
 function buildFieldsFromPayload(p: UpsertPayload) {
-  // What we always set for onboarding intake
+  // Phase 3A: onboarding writes only to fields that still exist in the new schema.
+  // Dead fields removed: UseCase, MeetingType, ChannelsWanted, OnboardingJSON.
+  // OnboardingPending status replaced with "New Lead" (no longer a valid pipeline value).
   const base: any = {
     Source: "Onboarding",
-    Status: "OnboardingPending",
+    Status: "New Lead",
     Email: p.email || "",
     Name: p.name || p.business || "",
     Message: p.notes || "",
-    Website: p.website || "",
+    "Current Website URL": p.website || "",
     Phone: p.phone || "",
-    OnboardingJSON: JSON.stringify(p),
   };
 
-  // Optional fields if present (make sure column names exist)
-  if (p.useCase) base.UseCase = p.useCase;                      // single select or text
-  if (p.meetingType) base.MeetingType = p.meetingType;          // single select or text
-  if (Array.isArray(p.channels)) base.ChannelsWanted = p.channels; // multi select
-
-  if (p.stripeSessionId) base.StripePaymentId = p.stripeSessionId; // optional surface
+  if (p.business) base["Business Name"] = p.business;
+  if (p.stripeSessionId) base.StripePaymentId = p.stripeSessionId;
 
   return base;
 }
