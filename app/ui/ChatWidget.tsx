@@ -33,23 +33,60 @@ const WD: Record<string, number> = {
   sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
 };
 
+const MONTHS: Record<string, number> = {
+  jan: 0, january: 0,
+  feb: 1, february: 1,
+  mar: 2, march: 2,
+  apr: 3, april: 3,
+  may: 4,
+  jun: 5, june: 5,
+  jul: 6, july: 6,
+  aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9,
+  nov: 10, november: 10,
+  dec: 11, december: 11,
+};
+
 function parseNaturalDay(text: string): Date | null {
   const t = text.trim().toLowerCase();
   const now = new Date();
   if (t === "today") return now;
   if (t === "tomorrow" || t === "tmrw")
     return new Date(now.getTime() + 86400000);
-  const m = t.match(
+
+  // "May 12", "may 12th", "Jan 3" — picks the next future occurrence of that
+  // month/day (this year or next year if the date already passed).
+  const md = t.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i
+  );
+  if (md) {
+    const monIdx = MONTHS[md[1].toLowerCase()];
+    const day = parseInt(md[2], 10);
+    if (monIdx != null && day >= 1 && day <= 31) {
+      let year = now.getFullYear();
+      let candidate = new Date(year, monIdx, day);
+      // If the candidate is more than a day in the past, roll forward a year
+      if (candidate.getTime() < now.getTime() - 86400000) {
+        candidate = new Date(year + 1, monIdx, day);
+      }
+      return candidate;
+    }
+  }
+
+  // Weekday: "wed", "next friday", etc.
+  const wd = t.match(
     /(?:^|\b)(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i
   );
-  if (m) {
-    const want = WD[m[2].toLowerCase()];
+  if (wd) {
+    const want = WD[wd[2].toLowerCase()];
     if (want == null) return null;
     const base = new Date(now);
     let daysAhead = (want - base.getDay() + 7) % 7;
-    if (daysAhead === 0 || m[1]) daysAhead += 7;
+    if (daysAhead === 0 || wd[1]) daysAhead += 7;
     return new Date(base.getTime() + daysAhead * 86400000);
   }
+
   return null;
 }
 
@@ -310,11 +347,36 @@ export default function ChatWidget() {
 
   function selectSlotFromUserText(text: string, slots: Slot[]): Slot | null {
     if (/\bmorning|afternoon|evening\b/i.test(text)) return null;
-    const loose = parseLooseTime(text);
+
+    // If the user named a day (weekday, today/tomorrow, or "May 12"),
+    // narrow candidates to that day so we don't match wrong-day slots
+    // when the day word's digits leak into time parsing.
+    const dayDate = parseNaturalDay(text);
+    let candidates = slots;
+    if (dayDate) {
+      const sameDaySlots = slots.filter((s) => sameYMD(new Date(s.start), dayDate));
+      if (sameDaySlots.length > 0) candidates = sameDaySlots;
+    }
+
+    // Strip day words and month+day phrases before parsing time, so
+    // "may 12 at 4:30" doesn't get its "12" parsed as the hour.
+    const timeOnlyText = text
+      .replace(
+        /\b(today|tmrw|tomorrow|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)\b/gi,
+        ""
+      )
+      .replace(
+        /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/gi,
+        ""
+      )
+      .trim();
+
+    const loose = parseLooseTime(timeOnlyText);
     if (!loose) return null;
+
     let best: Slot | null = null;
     let bestDelta = Infinity;
-    for (const s of slots) {
+    for (const s of candidates) {
       const mins = timeFromLabel(s.label);
       if (mins == null) continue;
       const delta = Math.abs(mins - loose.mins);
