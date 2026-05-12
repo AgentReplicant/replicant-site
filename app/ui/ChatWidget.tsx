@@ -470,7 +470,7 @@ export default function ChatWidget() {
 
     // ---------- Email handoff capture ----------
     if (pending === "email_handoff") {
-      const emailMatch = (val.match(EMAIL_RE) || [])[0];
+      const emailMatch = (val.match(EMAIL_EXTRACT_RE) || [])[0];
       if (!emailMatch) {
         appendBot("Mind sharing a valid email so we can follow up?");
         return;
