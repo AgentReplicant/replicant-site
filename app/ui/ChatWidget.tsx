@@ -75,6 +75,9 @@ function parseNaturalDay(text: string): Date | null {
   }
 
   // Weekday: "wed", "next friday", etc.
+  // - "tuesday" when today is Tuesday → today (not next week).
+  //   The user is choosing from already-offered slots, not asking for "the week after".
+  // - "next tuesday" → always jumps a week.
   const wd = t.match(
     /(?:^|\b)(next\s+)?(sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?)(?:\b|$)/i
   );
@@ -83,7 +86,8 @@ function parseNaturalDay(text: string): Date | null {
     if (want == null) return null;
     const base = new Date(now);
     let daysAhead = (want - base.getDay() + 7) % 7;
-    if (daysAhead === 0 || wd[1]) daysAhead += 7;
+    // Only push to next week if user explicitly said "next" — same-day match returns today.
+    if (wd[1]) daysAhead += 7;
     return new Date(base.getTime() + daysAhead * 86400000);
   }
 
@@ -355,7 +359,10 @@ export default function ChatWidget() {
     let candidates = slots;
     if (dayDate) {
       const sameDaySlots = slots.filter((s) => sameYMD(new Date(s.start), dayDate));
-      if (sameDaySlots.length > 0) candidates = sameDaySlots;
+      // If user named a day that isn't in the offered list, refuse rather than
+      // silently fall back to all slots and book the wrong day.
+      if (sameDaySlots.length === 0) return null;
+      candidates = sameDaySlots;
     }
 
     // Strip day words and month+day phrases before parsing time, so
