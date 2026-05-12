@@ -135,7 +135,7 @@ function renderTextWithLink(text: string, link?: string): React.ReactNode {
   return (
     <>
       {before}
-      <a className="underline" href={link} target="_blank" rel="noreferrer">
+      <a className="underline" href={link} target="_blank" rel="noopener noreferrer">
         {link}
       </a>
       {after}
@@ -678,7 +678,7 @@ export default function ChatWidget() {
                           className="underline break-all"
                           href={m.meta.link}
                           target="_blank"
-                          rel="noreferrer"
+                          rel="noopener noreferrer"
                         >
                           {m.meta.link}
                         </a>
