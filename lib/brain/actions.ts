@@ -38,10 +38,9 @@ export async function bookSlot(args: {
   start: string;
   end: string;
   email: string;
-  mode?: "video" | "phone";
-  phone?: string;
-  summary?: string;
-  description?: string;
+  phone: string;
+  name?: string;
+  notes?: string;
 }) {
   const res = await fetch(`${baseUrl()}/api/schedule`, {
     method: "POST",
@@ -55,11 +54,9 @@ export async function bookSlot(args: {
     ok: true;
     eventId: string;
     htmlLink?: string;
-    meetLink?: string;
     when?: string;
     start?: string;
     end?: string;
-    mode?: string;
     phone?: string;
   };
 }

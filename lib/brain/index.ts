@@ -114,22 +114,20 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   const intent = detectIntent(typeof input?.message === "string" ? input.message : "");
   const kind: string = (intent as any)?.kind;
 
-  /* ---------- Final booking (client passes pickSlot) — preserved ---------- */
+  /* ---------- Final booking (client passes pickSlot) — phone-only MVP ---------- */
   if (input?.pickSlot) {
-    const { start, end, email, mode, phone } = input.pickSlot || {};
+    const { start, end, email, phone, name } = input.pickSlot || {};
     if (!start || !end || !email)
-      return { type: "error", text: "I'll need an email for the invite to confirm." };
+      return { type: "error", text: "I'll need an email to confirm the booking." };
+    if (!phone)
+      return { type: "error", text: "I'll need a phone number to book the call." };
     try {
       const r = await bookSlot({
         start, end, email,
-        mode: mode === "video" ? "video" : "phone",
-        phone: mode === "phone" ? (phone || "") : undefined,
-        summary: "Replicant — Intro Call",
-        description: mode === "phone"
-          ? `Phone call. We will call: ${phone || "(number not provided)"}.`
-          : "Auto-booked from Replicant site chat. Times in ET.",
+        phone,
+        name: name || "",
       });
-      return { type: "booked", when: r.when, meetLink: r.meetLink };
+      return { type: "booked", when: r.when };
     } catch {
       return { type: "error", text: "Couldn't book that time — want to try another?" };
     }
@@ -184,19 +182,15 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     return { type: "text", text: t };
   }
 
-  /* ---------- Human mode reply — phone / video / email ---------- */
+  /* ---------- Human mode reply — phone / email ---------- */
   if (kind === "human_mode") {
-    const chosenMode = (intent as any).mode as "phone" | "video" | "email";
+    const chosenMode = (intent as any).mode as "phone" | "email";
     if (chosenMode === "email") {
       // Skip tone-smoothing — we need the exact phrase to trigger email_handoff state in widget
       return { type: "text", text: copy.emailHandoff };
     }
-    if (chosenMode === "phone") {
-      const t = await say("Phone works. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
-      return { type: "text", text: t };
-    }
-    // video
-    const t = await say("Google Meet it is. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
+    // phone
+    const t = await say("Phone works. What day works for you — or morning, afternoon, or evening? (ET.)", ctx);
     return { type: "text", text: t };
   }
 

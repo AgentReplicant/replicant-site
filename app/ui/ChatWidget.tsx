@@ -99,10 +99,9 @@ export default function ChatWidget() {
   const [page, setPage] = useState(0);
   const [lastSlots, setLastSlots] = useState<Slot[] | null>(null);
   const [chosenSlot, setChosenSlot] = useState<Slot | null>(null);
-  const [pending, setPending] = useState<null | "mode" | "phone" | "email" | "email_handoff">(
+  const [pending, setPending] = useState<null | "phone" | "email" | "email_handoff">(
     null
   );
-  const [mode, setMode] = useState<"phone" | "video">("phone");
   const wrapRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyRef = useRef<Hist>([]);
@@ -164,8 +163,12 @@ export default function ChatWidget() {
       setPage(s.page ?? 0);
       setLastSlots(s.lastSlots ?? null);
       setChosenSlot(s.chosenSlot ?? null);
-      setPending(s.pending ?? null);
-      setMode(s.mode ?? "phone");
+      // Whitelist pending state — any old "mode" value from prior versions becomes null
+      const validPending =
+        s.pending === "phone" || s.pending === "email" || s.pending === "email_handoff"
+          ? s.pending
+          : null;
+      setPending(validPending);
 
       if (restoredMessages.length > 0) {
         historyRef.current = restoredMessages.map((m) => ({
@@ -184,11 +187,11 @@ export default function ChatWidget() {
         STORE_KEY,
         JSON.stringify({
           messages, email, phone, name, date, page,
-          lastSlots, chosenSlot, pending, mode,
+          lastSlots, chosenSlot, pending,
         })
       );
     } catch {}
-  }, [messages, email, phone, name, date, page, lastSlots, chosenSlot, pending, mode]);
+  }, [messages, email, phone, name, date, page, lastSlots, chosenSlot, pending]);
 
   /* Autoscroll */
   useEffect(() => {
@@ -345,12 +348,10 @@ export default function ChatWidget() {
       setLastSlots(null);
       setChosenSlot(null);
       setPending(null);
-      let confirmation = "All set — invite sent.";
-      if (data.when) confirmation = `All set for ${data.when} — invite sent.`;
-      appendBot(
-        data.meetLink ? `${confirmation} Your Meet link is below.` : confirmation,
-        data.meetLink ? { link: data.meetLink } : undefined
-      );
+      const confirmation = data.when
+        ? `All set for ${data.when}. We'll call you at the number you provided. A confirmation email is on its way.`
+        : "All set. We'll call you at the number you provided. A confirmation email is on its way.";
+      appendBot(confirmation);
       return;
     }
 
@@ -427,20 +428,8 @@ export default function ChatWidget() {
       const sel = selectSlotFromUserText(val, lastSlots);
       if (sel) {
         setChosenSlot(sel);
-        if (/\b(meet|video)\b/i.test(val)) {
-          setMode("video");
-          setPending("email");
-          appendBot(
-            "Google Meet works. What's the best email for the invite?"
-          );
-        } else if (/\b(phone|call)\b/i.test(val)) {
-          setMode("phone");
-          setPending("phone");
-          appendBot("Phone works. What's the best number to call?");
-        } else {
-          setPending("mode");
-          appendBot("Do you want a phone call or Google Meet?");
-        }
+        setPending("phone");
+        appendBot("Got it. What's the best number to call?");
         return;
       }
 
@@ -463,27 +452,7 @@ export default function ChatWidget() {
       }
     }
 
-    // ---------- Mode follow-up (after slot pick) ----------
-    if (pending === "mode") {
-      if (/\b(meet|video)\b/i.test(val)) {
-        setMode("video");
-        setPending("email");
-        appendBot("Great — what's the best email for the Meet invite?");
-      } else {
-        setMode("phone");
-        setPending("phone");
-        appendBot("Phone it is. What's the best number to call?");
-      }
-      return;
-    }
-
     if (pending === "phone") {
-      if (/\b(google meet|meet|video)\b/i.test(val)) {
-        setMode("video");
-        setPending("email");
-        appendBot("Google Meet it is. What's the best email for the invite?");
-        return;
-      }
       const digits = onlyDigits(val);
       if (digits.length < 7) {
         appendBot("Could you share the full number with area code?");
@@ -491,7 +460,7 @@ export default function ChatWidget() {
       }
       setPhone(digits);
       setPending("email");
-      appendBot("Thanks. What's the best email for the calendar invite?");
+      appendBot("Thanks. What's the best email for your confirmation?");
       return;
     }
 
@@ -512,8 +481,8 @@ export default function ChatWidget() {
             start: chosenSlot.start,
             end: chosenSlot.end,
             email: val,
-            mode,
-            phone: mode === "phone" ? phone : undefined,
+            phone,
+            name,
           },
         });
         await handleBrainResult(booked);

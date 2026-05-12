@@ -28,7 +28,7 @@ export async function POST(req: Request) {
       : res.type === "action" && res.action === "open_url"
       ? `${res.text ? res.text + " " : ""}${res.url}`
       : res.type === "booked"
-      ? `You're all set.${res.meetLink ? ` Meet: ${res.meetLink}` : ""}`
+      ? `You're all set${res.when ? ` for ${res.when}` : ""}.`
       : res.type === "slots"
       ? (res.text || "Here are some times (ET):") +
         "\n" +

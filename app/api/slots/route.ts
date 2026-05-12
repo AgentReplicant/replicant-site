@@ -18,7 +18,7 @@ type Rules = {
 };
 
 const BOOKING_TZ = process.env.BOOKING_TZ || "America/New_York";
-const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "";
 const SA_JSON = process.env.GOOGLE_SA_JSON || "";
 
 // Lead-time (mins) from env with sane fallback + bounds
@@ -107,9 +107,9 @@ function readRules(): Rules {
   return base;
 }
 function getCalendarClient() {
-  if (!SA_JSON)
+  if (!SA_JSON || !CALENDAR_ID)
     throw new Error(
-      "Service Account not configured. Missing GOOGLE_SA_JSON."
+      "Calendar not configured. Missing GOOGLE_SA_JSON or GOOGLE_CALENDAR_ID."
     );
   const creds = JSON.parse(SA_JSON);
   const auth = new google.auth.GoogleAuth({

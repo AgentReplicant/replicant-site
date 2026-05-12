@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       : res.type === "action"
         ? `${res.text} ${res.url ?? ""}`.trim()
         : res.type === "booked"
-          ? `You're all set. Meet: ${res.meetLink ?? ""}`.trim()
+            ? `You're all set${res.when ? ` for ${res.when}` : ""}.`.trim()
           : res.type === "slots"
             ? res.text || "Here are some times (ET):"
             : "Sorry — something went wrong.";

@@ -7,7 +7,7 @@ export type Intent =
   | { kind: "pricing"; tier?: "starter" | "booking" | "assistant" | "overview" }
   | { kind: "pay" }
   | { kind: "human" }
-  | { kind: "human_mode"; mode: "phone" | "video" | "email" }
+  | { kind: "human_mode"; mode: "phone" | "email" }
   | { kind: "audit" }
   | { kind: "what_is" }
   | { kind: "identity" }
@@ -29,9 +29,8 @@ const CLOCK_RE = /(around|about|after|before|by)?\s*\b(\d{1,2})(?::(\d{2}))?\s*(
 const HUMAN_RE =
   /\b(talk to (a )?(human|person|someone|rep|agent|marlon)|speak to (a )?(human|person|someone|rep|agent|marlon)|human support|can i talk to|can i speak to|i want to talk|need to speak)\b/i;
 
-// Short standalone mode replies — "phone" / "meet" / "email" as full input
+// Short standalone mode replies — "phone" / "email" as full input
 const HUMAN_MODE_PHONE_RE = /^(?:phone|call|phone call)$/i;
-const HUMAN_MODE_VIDEO_RE = /^(?:google ?meet|meet|video call|video)$/i;
 const HUMAN_MODE_EMAIL_RE = /^(?:email|e-mail|email me|just email)$/i;
 
 // "What is Replicant" / what do you do — about the COMPANY
@@ -94,7 +93,6 @@ export function detectIntent(text: string): Intent {
 
   // Short mode replies (must come BEFORE other checks because they're standalone words)
   if (HUMAN_MODE_PHONE_RE.test(t)) return { kind: "human_mode", mode: "phone" };
-  if (HUMAN_MODE_VIDEO_RE.test(t)) return { kind: "human_mode", mode: "video" };
   if (HUMAN_MODE_EMAIL_RE.test(t)) return { kind: "human_mode", mode: "email" };
 
   // Money & checkout

@@ -65,13 +65,13 @@ export const copy = {
 
   // ---------- Human handoff (now offers email as a third option) ----------
   humanOffer:
-    "Happy to connect you with a real person. Would you prefer phone, Google Meet, or email?",
+    "Happy to connect you with a real person. Would you prefer a phone call or email follow-up?",
   emailHandoff:
     "Got it — email works. What's the best email to reach you at, and a quick note on what you'd like to discuss?",
   emailReceived:
     "Thanks — I'll make sure someone follows up by email within one business day.",
 
-  // ---------- Scheduling (for when user explicitly asks for a call/Meet) ----------
+  // ---------- Scheduling (for when user explicitly asks for a call) ----------
   askDay: "What day works for you? (Times are shown in Eastern Time.)",
   pickTime: "Here are a few times (ET):",
   bookedOk: (when?: string) => `All set${when ? ` — ${when}` : ""}.`,
