@@ -127,7 +127,7 @@ async function upsertLeadPaid({
         headers,
         body: JSON.stringify({
           fields: {
-            Status: "Paid",
+            Status: "Won",
             StripePaymentId: stripeSessionId || "",
             Source: "Stripe", // <- normalized title-case
           },
@@ -148,7 +148,7 @@ async function upsertLeadPaid({
               fields: {
                 Name: name || "",
                 Email: email,
-                Status: "Paid",
+                Status: "Won",
                 StripePaymentId: stripeSessionId || "",
                 Source: "Stripe", // <- normalized title-case
               },
