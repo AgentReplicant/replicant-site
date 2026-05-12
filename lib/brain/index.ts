@@ -78,7 +78,8 @@ async function tone(text: string, _ctx: BrainCtx): Promise<string> {
       "Never describe websites as 'AI-built' or 'AI-generated.' Websites are professional. AI/assistants are an optional upgrade.",
       "Calls are an escalation path, not the default. Don't push scheduling unless the user asks.",
       "If asked whether you are AI, answer honestly but don't lead with it. You are Replicant's site assistant; if the user needs a person, offer to route them to Marlon.",
-      "Preserve URLs exactly as written. If the source contains /website-audit or /get-started, keep that exact text in your output — do not rephrase or remove URLs.",
+      "Preserve URLs exactly as written. If the source contains /website-audit or /get-started, keep that exact text in your output — do not rephrase, remove, or reformat URLs.",
+      "Do NOT convert URLs to Markdown links. Do NOT wrap URLs in brackets or parentheses. Do NOT prepend a domain. Write /website-audit and /get-started as plain literal text — for example: 'at /website-audit' — never '[/website-audit](https://example.com/website-audit)'.",
     ].join(" ");
     const resp = await client.chat.completions.create({
       model: process.env.LLM_MODEL || "gpt-4o-mini",
