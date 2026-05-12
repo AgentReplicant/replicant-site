@@ -78,6 +78,7 @@ async function tone(text: string, _ctx: BrainCtx): Promise<string> {
       "Never describe websites as 'AI-built' or 'AI-generated.' Websites are professional. AI/assistants are an optional upgrade.",
       "Calls are an escalation path, not the default. Don't push scheduling unless the user asks.",
       "If asked whether you are AI, answer honestly but don't lead with it. You are Replicant's site assistant; if the user needs a person, offer to route them to Marlon.",
+      "Preserve URLs exactly as written. If the source contains /website-audit or /get-started, keep that exact text in your output — do not rephrase or remove URLs.",
     ].join(" ");
     const resp = await client.chat.completions.create({
       model: process.env.LLM_MODEL || "gpt-4o-mini",
@@ -142,44 +143,46 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   /* ---------- "What is Replicant?" ---------- */
   if (kind === "what_is") {
     const t = await say(`${copy.whatIsReplicant} ${copy.routeToAudit}`, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link: "/website-audit" } };
   }
 
   /* ---------- Categories ---------- */
   if (kind === "category") {
     const cat = (intent as any).category as "beauty" | "wellness" | "home_trade" | "overview";
     let text: string;
-    if (cat === "beauty") text = `${copy.categoryBeauty} ${copy.routeToAudit}`;
-    else if (cat === "wellness") text = `${copy.categoryWellness} ${copy.routeToAudit}`;
-    else if (cat === "home_trade") text = `${copy.categoryHomeTrade} ${copy.routeToAudit}`;
+    let link: string | undefined;
+    if (cat === "beauty") { text = `${copy.categoryBeauty} ${copy.routeToAudit}`; link = "/website-audit"; }
+    else if (cat === "wellness") { text = `${copy.categoryWellness} ${copy.routeToAudit}`; link = "/website-audit"; }
+    else if (cat === "home_trade") { text = `${copy.categoryHomeTrade} ${copy.routeToAudit}`; link = "/website-audit"; }
     else text = `${copy.categoriesOverview} Which one fits your business?`;
     const t = await say(text, ctx);
-    return { type: "text", text: t };
+    return link ? { type: "text", text: t, meta: { link } } : { type: "text", text: t };
   }
 
   /* ---------- Pricing ---------- */
   if (kind === "pricing") {
     const tier = (intent as any).tier as "starter" | "booking" | "assistant" | "overview" | undefined;
     let text: string;
-    if (tier === "starter") text = `${copy.pricingStarter} ${copy.routeToAudit}`;
-    else if (tier === "booking") text = `${copy.pricingBookingQuote} ${copy.routeToAudit}`;
-    else if (tier === "assistant") text = `${copy.pricingSiteAssistant} ${copy.routeToGetStarted}`;
-    else text = `${copy.pricingOverview} ${copy.routeToAudit}`;
+    let link: string;
+    if (tier === "starter") { text = `${copy.pricingStarter} ${copy.routeToAudit}`; link = "/website-audit"; }
+    else if (tier === "booking") { text = `${copy.pricingBookingQuote} ${copy.routeToAudit}`; link = "/website-audit"; }
+    else if (tier === "assistant") { text = `${copy.pricingSiteAssistant} ${copy.routeToGetStarted}`; link = "/get-started"; }
+    else { text = `${copy.pricingOverview} ${copy.routeToAudit}`; link = "/website-audit"; }
     const t = await say(text, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link } };
   }
 
   /* ---------- Audit intent ---------- */
   if (kind === "audit") {
     const text = `${copy.auditPitch} ${copy.auditLink}`;
     const t = await say(text, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link: "/website-audit" } };
   }
 
   /* ---------- Assistant upgrade interest ---------- */
   if (kind === "assistant_info") {
     const t = await say(`${copy.assistantStatus}`, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link: "/get-started" } };
   }
 
   /* ---------- Human mode reply — phone / email ---------- */
@@ -205,7 +208,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     // Old Stripe link is for the AI assistant product, which is now in development.
     // Route to /get-started for interest registration instead.
     const t = await say(`${copy.assistantStatus}`, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link: "/get-started" } };
   }
 
   /* ---------- Booking logic — preserved, only triggered when user explicitly asks ---------- */
@@ -297,7 +300,7 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "capability") {
     const text = `${copy.whatIsReplicant} ${copy.categoriesOverview} ${copy.routeToAudit}`;
     const t = await say(text, ctx);
-    return { type: "text", text: t };
+    return { type: "text", text: t, meta: { link: "/website-audit" } };
   }
 
   /* ---------- Soft fallback — never call-pushy ---------- */

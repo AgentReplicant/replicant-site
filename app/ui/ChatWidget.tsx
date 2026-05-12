@@ -127,6 +127,22 @@ function timeFromLabel(label: string): number | null {
   return hh * 60 + mm;
 }
 
+function renderTextWithLink(text: string, link?: string): React.ReactNode {
+  if (!link || !text.includes(link)) return text;
+  const idx = text.indexOf(link);
+  const before = text.slice(0, idx);
+  const after = text.slice(idx + link.length);
+  return (
+    <>
+      {before}
+      <a className="underline" href={link} target="_blank" rel="noreferrer">
+        {link}
+      </a>
+      {after}
+    </>
+  );
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [isTall, setIsTall] = useState(false);
@@ -432,11 +448,11 @@ export default function ChatWidget() {
     }
 
     if (data?.type === "text" && data.text) {
-      appendBot(data.text);
+      appendBot(data.text, data.meta?.link ? { link: data.meta.link } : undefined);
 
       // If the brain just offered the email handoff prompt, enter email_handoff pending state
       // Match multiple phrasings since LLM tone-smoothing rewrites the copy
-      if (/best email (?:address )?to reach you/i.test(data.text) || /email (?:address )?(?:works?|for|to (?:reach|contact|follow))/i.test(data.text)) {
+      if (/best email (?:address )?to reach you/i.test(data.text) || /email (?:address )?(?:works?|for|to (?:reach|contact|follow))/i.test(data.text)) {      
         setPending("email_handoff");
       }
       return;
@@ -653,8 +669,10 @@ export default function ChatWidget() {
                         : "bg-white text-black border-gray-200"
                     }`}
                   >
-                    <div className="text-[13px] leading-relaxed">{m.text}</div>
-                    {m.meta?.link && (
+                    <div className="text-[13px] leading-relaxed">
+                      {renderTextWithLink(m.text, m.meta?.link)}
+                    </div>
+                    {m.meta?.link && !m.text.includes(m.meta.link) && (
                       <div className="mt-1">
                         <a
                           className="underline break-all"
