@@ -89,10 +89,27 @@ async function tone(text: string, _ctx: BrainCtx): Promise<string> {
         { role: "user", content: `Rewrite naturally in the Replicant assistant voice:\n---\n${text}\n---` },
       ],
     });
-    return resp?.choices?.[0]?.message?.content?.trim() || text;
+    const out = resp?.choices?.[0]?.message?.content?.trim() || text;
+    return normalizeCtaLinks(out);
   } catch {
     return text;
   }
+}
+
+/**
+ * Strip Markdown link wrappers around our CTA paths. The LLM often "helpfully"
+ * converts /website-audit and /get-started into [/website-audit](https://...)
+ * even when told not to. We force them back to plain literal paths so the
+ * widget can detect them and render inline clickable links.
+ */
+function normalizeCtaLinks(text: string): string {
+  return text
+    // [/website-audit](https://...anything...) → /website-audit
+    .replace(/\[\/website-audit\]\([^)]*\)/gi, "/website-audit")
+    .replace(/\[\/get-started\]\([^)]*\)/gi, "/get-started")
+    // Bare full URLs back to relative paths
+    .replace(/https?:\/\/[^\s)]*\/website-audit/gi, "/website-audit")
+    .replace(/https?:\/\/[^\s)]*\/get-started/gi, "/get-started");
 }
 
 function norm(s?: string) {
