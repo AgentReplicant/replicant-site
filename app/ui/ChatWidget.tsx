@@ -333,7 +333,12 @@ export default function ChatWidget() {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
     void logMessage("user", text);
-    void maybeUpsertLeadFromText(text);
+    // Skip opportunistic lead capture if we're in the email-handoff state —
+    // the handoff handler will write the lead with the correct source/status,
+    // and we'd otherwise race two writes to Airtable.
+    if (pending !== "email_handoff") {
+      void maybeUpsertLeadFromText(text);
+    }
   }
 
   function appendBot(text: string, meta?: { link?: string }) {
