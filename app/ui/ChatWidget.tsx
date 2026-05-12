@@ -10,6 +10,8 @@ type DateFilter = { y: number; m: number; d: number } | null;
 
 const STORE_KEY = "replicant_chat_v12";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+// Non-anchored version for extracting an email from inside a longer message.
+const EMAIL_EXTRACT_RE = /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/i;
 const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/;
 const NAME_RE =
   /\b(?:my name is|i'm|i am)\s+([a-z][a-z'-]+(?:\s+[a-z][a-z'-]+){0,2})\b/i;
@@ -304,7 +306,7 @@ export default function ChatWidget() {
 
   async function maybeUpsertLeadFromText(text: string) {
     try {
-      const emailMatch = (text.match(EMAIL_RE) || [])[0];
+      const emailMatch = (text.match(EMAIL_EXTRACT_RE) || [])[0];
       const phoneMatchRaw = (text.match(PHONE_RE) || [])[0];
       const phoneDigits = onlyDigits(phoneMatchRaw || "");
       const nameMatch = (text.match(NAME_RE) || [])[1];
