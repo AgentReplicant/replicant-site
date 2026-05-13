@@ -206,13 +206,13 @@ export default function AuditForm() {
         </label>
 
         <label className={labelClass}>
-          Instagram or Social Link (optional)
+          Current Website (optional)
           <input
             type="text"
             className={inputClass}
-            placeholder="https://instagram.com/yourhandle"
-            value={socialUrl}
-            onChange={(e) => setSocialUrl(e.target.value)}
+            placeholder="https://yourbusiness.com"
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
           />
         </label>
 
