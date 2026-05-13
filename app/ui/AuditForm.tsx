@@ -32,6 +32,13 @@ const GOALS = [
 
 const TIMELINES = ["ASAP", "1–2 weeks", "This month", "Just exploring"];
 
+function normalizeUrl(value: string) {
+  const v = value.trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  return `https://${v}`;
+}
+
 const BUDGETS = [
   "Under $500",
   "$500–$1,000",
@@ -76,8 +83,8 @@ export default function AuditForm() {
           email,
           phone,
           businessCategory: category,
-          currentWebsiteUrl: websiteUrl,
-          socialLink: socialUrl,
+          currentWebsiteUrl: normalizeUrl(websiteUrl),
+          socialLink: normalizeUrl(socialUrl),
           bookingPlatform,
           mainGoal: goal,
           mainProblem: problem,
@@ -199,20 +206,20 @@ export default function AuditForm() {
         </label>
 
         <label className={labelClass}>
-          Current Website (optional)
+          Instagram or Social Link (optional)
           <input
-            type="url"
+            type="text"
             className={inputClass}
-            placeholder="https://yourbusiness.com"
-            value={websiteUrl}
-            onChange={(e) => setWebsiteUrl(e.target.value)}
+            placeholder="https://instagram.com/yourhandle"
+            value={socialUrl}
+            onChange={(e) => setSocialUrl(e.target.value)}
           />
         </label>
 
         <label className={labelClass}>
           Instagram or Social Link (optional)
           <input
-            type="url"
+            type="text"
             className={inputClass}
             placeholder="https://instagram.com/yourhandle"
             value={socialUrl}
