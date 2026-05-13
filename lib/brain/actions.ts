@@ -1,37 +1,15 @@
 // lib/brain/actions.ts
-import type { DateFilter, Slot } from "./types";
-
-function baseUrl() {
-  // Prefer explicit, then Vercel-provided, else last-resort localhost (dev only)
-  const explicit =
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.SITE_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  return explicit || "http://localhost:3000";
-}
+import { getAvailableSlots } from "@/lib/calendar/google";
+import { bookAndConfirmPhoneCall } from "@/lib/booking/phoneCall";
+import type { Slot, DateFilter } from "@/lib/brain/types";
 
 export async function getSlots(
   date: DateFilter,
   page = 0,
   limit = 12
 ): Promise<{ slots: Slot[]; date?: DateFilter }> {
-  const params = new URLSearchParams();
-  if (date) {
-    params.set("y", String(date.y));
-    params.set("m", String(date.m).padStart(2, "0"));
-    params.set("d", String(date.d).padStart(2, "0"));
-  }
-  params.set("limit", String(limit));
-  params.set("page", String(page));
-
-  const res = await fetch(`${baseUrl()}/api/slots?${params.toString()}`, {
-    method: "GET",
-    headers: { "content-type": "application/json" },
-    cache: "no-store",
-  });
-  const json = await res.json().catch(() => ({} as any));
-  if (!json?.ok) throw new Error(json?.error || "slots failed");
-  return { slots: (json.slots || []) as Slot[], date };
+  const slots = await getAvailableSlots({ date, page, limit });
+  return { slots, date: date ?? undefined };
 }
 
 export async function bookSlot(args: {
@@ -42,23 +20,7 @@ export async function bookSlot(args: {
   name?: string;
   notes?: string;
 }) {
-  const res = await fetch(`${baseUrl()}/api/schedule`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify(args),
-  });
-  const json = await res.json().catch(() => ({} as any));
-  if (!json?.ok) throw new Error(json?.error || "schedule failed");
-  return json as {
-    ok: true;
-    eventId: string;
-    htmlLink?: string;
-    when?: string;
-    start?: string;
-    end?: string;
-    phone?: string;
-  };
+  return await bookAndConfirmPhoneCall(args);
 }
 
 export function getCheckoutLink(): { url: string } {
