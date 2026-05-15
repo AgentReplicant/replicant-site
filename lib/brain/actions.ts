@@ -1,7 +1,7 @@
 // lib/brain/actions.ts
 import { getAvailableSlots } from "@/lib/calendar/google";
 import { bookAndConfirmPhoneCall } from "@/lib/booking/phoneCall";
-import type { Slot, DateFilter } from "@/lib/brain/types";
+import type { Slot, DateFilter } from "@/lib/shared/types";
 
 export async function getSlots(
   date: DateFilter,

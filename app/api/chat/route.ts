@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { brainProcess } from "@/lib/brain";
 import type { BrainCtx } from "@/lib/brain/types";
+import type { PickSlotPayload } from "@/lib/shared/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,9 @@ export async function POST(req: Request) {
     };
 
     // Input: either a structured booking pick or a user message
-    const input = body?.pickSlot
-      ? { pickSlot: body.pickSlot }
+    const pick = body?.pickSlot as PickSlotPayload | undefined;
+    const input = pick
+      ? { pickSlot: pick }
       : { message: String(body?.message || "") };
 
     const result = await brainProcess(input, ctx);

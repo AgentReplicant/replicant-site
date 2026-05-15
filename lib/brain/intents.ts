@@ -1,5 +1,4 @@
 // lib/brain/intents.ts
-import type { DateFilter } from "./types";
 
 export type Intent =
   | { kind: "book" }
@@ -154,8 +153,4 @@ export function detectIntent(text: string): Intent {
   if (CAPABILITY_RE.test(low)) return { kind: "capability" };
 
   return { kind: "fallback" };
-}
-
-export function toDateFilterFromWord(_word: string, _tz = "America/New_York"): DateFilter | null {
-  return null;
 }

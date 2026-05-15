@@ -1,13 +1,11 @@
 // lib/brain/types.ts
+//
+// Brain-specific types. Slot/DateFilter live in lib/shared/types and are
+// re-exported here for back-compat with existing brain-internal imports.
 
-export type Slot = {
-  start: string;
-  end: string;
-  label: string;
-  disabled?: boolean;
-};
+export type { Slot, DateFilter } from "@/lib/shared/types";
 
-export type DateFilter = { y: number; m: number; d: number } | null;
+import type { Slot, DateFilter } from "@/lib/shared/types";
 
 export type BrainResult =
   | { type: "text"; text: string; meta?: { link?: string } }

@@ -8,7 +8,7 @@
 
 import "server-only";
 import { google, calendar_v3 } from "googleapis";
-import type { Slot, DateFilter } from "@/lib/brain/types";
+import type { Slot, DateFilter } from "@/lib/shared/types";
 
 // ---------- Config ----------
 

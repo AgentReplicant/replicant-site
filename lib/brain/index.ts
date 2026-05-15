@@ -3,6 +3,7 @@ import { detectIntent } from "./intents";
 import { copy } from "./copy/en";
 import { getSlots, bookSlot } from "./actions";
 import type { BrainCtx, BrainResult, Slot } from "./types";
+import type { PickSlotPayload } from "@/lib/shared/types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
 const POD: Record<"morning" | "afternoon" | "evening", [number, number]> = {
@@ -135,7 +136,8 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
 
   /* ---------- Final booking (client passes pickSlot) — phone-only MVP ---------- */
   if (input?.pickSlot) {
-    const { start, end, email, phone, name } = input.pickSlot || {};
+    const { start, end, email, phone, name } = (input.pickSlot ||
+      {}) as Partial<PickSlotPayload>;
     if (!start || !end || !email)
       return { type: "error", text: "I'll need an email to confirm the booking." };
     if (!phone)

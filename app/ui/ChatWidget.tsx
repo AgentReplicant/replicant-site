@@ -2,11 +2,10 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import type { Slot, DateFilter, PickSlotPayload } from "@/lib/shared/types";
 
 type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
-type Slot = { start: string; end: string; label: string; disabled?: boolean };
 type Hist = { role: "user" | "assistant"; content: string }[];
-type DateFilter = { y: number; m: number; d: number } | null;
 
 const STORE_KEY = "replicant_chat_v12";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
@@ -567,15 +566,19 @@ export default function ChatWidget() {
       }
       setBusy(true);
       try {
-        const booked = await callBrain({
-          pickSlot: {
-            start: chosenSlot.start,
-            end: chosenSlot.end,
-            email: val,
-            phone,
-            name,
-          },
-        });
+        if (!phone) {
+          appendBot("I lost your number somewhere — what's the best one to reach you at?");
+          setPending("phone");
+          return;
+        }
+        const pickSlot: PickSlotPayload = {
+          start: chosenSlot.start,
+          end: chosenSlot.end,
+          email: val,
+          phone,
+          name: name || undefined,
+        };
+        const booked = await callBrain({ pickSlot });
         await handleBrainResult(booked);
       } finally {
         setBusy(false);
