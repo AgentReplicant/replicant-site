@@ -1,9 +1,13 @@
 // lib/brain/index.ts
-import { detectIntent } from "./intents";
+import { detectIntent, matchQualificationAnswer } from "./intents";
 import { copy } from "./copy/en";
 import { getSlots, bookSlot } from "./actions";
 import type { BrainCtx, BrainResult, Slot } from "./types";
-import type { PickSlotPayload } from "@/lib/shared/types";
+import type {
+  PickSlotPayload,
+  QualificationField,
+  QualificationState,
+} from "@/lib/shared/types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
 const POD: Record<"morning" | "afternoon" | "evening", [number, number]> = {
@@ -129,10 +133,351 @@ async function say(text: string, ctx: BrainCtx): Promise<string> {
 /* ---------- Email validation for handoff ---------- */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
+/* ---------- Phase 3B: Qualification helpers ---------- */
+
+/** Order in which qualification questions are asked. */
+const QUAL_ORDER: QualificationField[] = [
+  "businessCategory",
+  "mainGoal",
+  "desiredTimeline",
+  "budgetRange",
+];
+
+/** Intents that trigger a qualification opener (answer first, then ask). */
+const TRIGGER_INTENTS = new Set([
+  "audit",
+  "pricing",
+  "category",
+  "assistant_info",
+  "capability",
+]);
+
+/** Intents where qualification re-prompts are suppressed (sacred conversational anchors). */
+const NO_REPROMPT_INTENTS = new Set([
+  "identity",
+  "what_is",
+  "human",
+  "human_mode",
+  "book",
+  "day",
+  "fallback",
+]);
+
+/** Map category intent values to canonical Airtable Business Category single-select values. */
+function categoryIntentToAirtable(cat: string): string | null {
+  if (cat === "beauty") return "Beauty & Grooming";
+  if (cat === "wellness") return "Wellness & Aesthetics";
+  if (cat === "home_trade") return "Home & Trade Services";
+  return null;
+}
+
+/** Detect first-person business framing ("my barber shop", "I own a salon"). */
+function isFirstPersonBusinessFraming(text: string): boolean {
+  return /\b(my|i (own|run|have)|our|we're a|we are a)\b.{0,40}\b(shop|salon|business|company|practice|spa|service|firm)\b/i.test(text);
+}
+
+/** Pick the first field that hasn't been answered yet. */
+function nextPendingField(q: QualificationState | undefined): QualificationField | undefined {
+  if (!q) return "businessCategory";
+  for (const f of QUAL_ORDER) {
+    if (!q[f]) return f;
+  }
+  return undefined; // all collected
+}
+
+/** Prompt copy for asking a specific field. */
+function promptForField(field: QualificationField): string {
+  switch (field) {
+    case "businessCategory":
+      return copy.qualifyAskCategory;
+    case "mainGoal":
+      return copy.qualifyAskGoal;
+    case "desiredTimeline":
+      return copy.qualifyAskTimeline;
+    case "budgetRange":
+      return copy.qualifyAskBudget;
+  }
+}
+
+/** Recommendation logic. Returns { package, message, link }. */
+function recommendPackage(q: QualificationState): {
+  pkg: string;
+  message: string;
+  link?: string;
+} {
+  const budget = q.budgetRange;
+  const goal = q.mainGoal;
+
+  // Under $500: honest disclosure, route to audit, no package recommendation
+  if (budget === "Under $500") {
+    return {
+      pkg: "Not Sure Yet",
+      message: copy.qualifyRecommendUnderBudget,
+      link: "/website-audit",
+    };
+  }
+
+  // $2,500+ → Site + Assistant
+  if (budget === "$2,500+") {
+    return {
+      pkg: "Website + Replicant Assistant",
+      message: copy.qualifyRecommendAssistant,
+      link: "/get-started",
+    };
+  }
+
+  // High-intent service goals → Booking/Quote regardless of budget tier (within mid-range)
+  const bookingGoals = new Set(["More bookings", "More quote requests", "More consultations"]);
+  if (goal && bookingGoals.has(goal) && (budget === "$500–$1,000" || budget === "$1,000–$2,500")) {
+    return {
+      pkg: "Booking / Quote Website",
+      message: copy.qualifyRecommendBookingQuote,
+      link: "/website-audit",
+    };
+  }
+
+  // $1,000–$2,500 default → Booking/Quote
+  if (budget === "$1,000–$2,500") {
+    return {
+      pkg: "Booking / Quote Website",
+      message: copy.qualifyRecommendBookingQuote,
+      link: "/website-audit",
+    };
+  }
+
+  // $500–$1,000 default → Starter
+  if (budget === "$500–$1,000") {
+    return {
+      pkg: "Starter Website",
+      message: copy.qualifyRecommendStarter,
+      link: "/website-audit",
+    };
+  }
+
+  // Fallback (shouldn't reach here if all fields collected)
+  return {
+    pkg: "Not Sure Yet",
+    message: copy.qualifyRecommendUnsure,
+    link: "/website-audit",
+  };
+}
+
+/**
+ * Post-process an intent branch's BrainResult, attaching qualification behavior:
+ *  - If intent is a TRIGGER and qualification isn't active yet → append opener, set active.
+ *  - If qualification is active+pending and intent is NON-trigger NON-suppressed →
+ *    append re-prompt; if repromptCount would exceed 1, deactivate instead.
+ *
+ * Only mutates result.text and result.qualification. Other fields untouched.
+ * Operates only on { type: "text" } results.
+ */
+async function withQualification(
+  result: BrainResult,
+  kind: string,
+  ctx: BrainCtx,
+  intent: any
+): Promise<BrainResult> {
+  if (result.type !== "text") return result;
+  const q = ctx.qualification;
+
+  // Case 1: trigger intent and qualification not yet active
+  if (TRIGGER_INTENTS.has(kind) && !q?.active && !q?.pendingField) {
+    // Hybrid category pre-fill rule (locked decision):
+    //  - First-person framing ("my barber shop") → infer + save category, skip to next field
+    //  - Generic category question ("do you build for barbers?") → confirm first
+    let qualificationPatch: Partial<QualificationState> = {};
+    const userText = ctx.lastUser || "";
+
+    if (kind === "category" && intent?.category && intent.category !== "overview") {
+      const airtableCat = categoryIntentToAirtable(intent.category);
+      if (airtableCat) {
+        if (isFirstPersonBusinessFraming(userText)) {
+          // Infer + save, jump to next field
+          const nextField = nextPendingField({ active: true, businessCategory: airtableCat });
+          const ask = nextField ? await say(promptForField(nextField), ctx) : "";
+          return {
+            ...result,
+            text: ask ? `${result.text} ${ask}` : result.text,
+            qualification: {
+              active: true,
+              businessCategory: airtableCat,
+              pendingField: nextField,
+            },
+          };
+        } else {
+          // Generic category question — confirm before saving
+          const confirmAsk = await say(copy.qualifyConfirmCategory(airtableCat), ctx);
+          return {
+            ...result,
+            text: `${result.text} ${confirmAsk}`,
+            qualification: {
+              active: true,
+              pendingCategoryConfirm: airtableCat,
+              pendingField: "businessCategory",
+            },
+          };
+        }
+      }
+    }
+
+    // Standard opener: ask the first pending field
+    const nextField = nextPendingField(q);
+    if (nextField) {
+      const ask = await say(promptForField(nextField), ctx);
+      return {
+        ...result,
+        text: `${result.text} ${ask}`,
+        qualification: { active: true, pendingField: nextField, ...qualificationPatch },
+      };
+    }
+  }
+
+  // Case 3: qualification active+pending AND a trigger intent fired.
+  // The user is asking a related question (pricing, audit, etc.) mid-qualification.
+  // Answer it AND softly re-prompt back to the pending field. Don't count this
+  // as an "ignored" turn — they're engaged, just clarifying.
+  if (q?.active && q.pendingField && TRIGGER_INTENTS.has(kind)) {
+    const fieldPrompt = q.pendingCategoryConfirm
+      ? copy.qualifyConfirmCategory(q.pendingCategoryConfirm)
+      : promptForField(q.pendingField);
+    const reprompt = await say(copy.qualifyReprompt(fieldPrompt), ctx);
+    return {
+      ...result,
+      text: `${result.text} ${reprompt}`,
+      // No qualification patch — state is preserved by widget since we don't overwrite
+    };
+  }
+
+  // Case 2: qualification active+pending, intent is a non-trigger non-suppressed real intent.
+  // User ignored the pending field. Re-prompt once; on 2nd ignore, deactivate.
+  if (
+    q?.active &&
+    q.pendingField &&
+    !TRIGGER_INTENTS.has(kind) &&
+    !NO_REPROMPT_INTENTS.has(kind)
+  ) {
+    const currentCount = q.repromptCount ?? 0;
+    if (currentCount >= 1) {
+      // Already re-prompted once and got ignored → deactivate, keep collected data
+      return {
+        ...result,
+        qualification: { active: false, pendingField: undefined, repromptCount: 0 },
+      };
+    }
+    // Append a soft re-prompt
+    const fieldPrompt = q.pendingCategoryConfirm
+      ? copy.qualifyConfirmCategory(q.pendingCategoryConfirm)
+      : promptForField(q.pendingField);
+    const reprompt = await say(copy.qualifyReprompt(fieldPrompt), ctx);
+    return {
+      ...result,
+      text: `${result.text} ${reprompt}`,
+      qualification: { repromptCount: currentCount + 1 },
+    };
+  }
+
+  return result;
+}
+
 /* ---------- Brain ---------- */
 export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResult> {
-  const intent = detectIntent(typeof input?.message === "string" ? input.message : "");
+  const userText = typeof input?.message === "string" ? input.message : "";
+  const intent = detectIntent(userText);
   const kind: string = (intent as any)?.kind;
+  const q = ctx.qualification;
+
+  /* ---------- Phase 3B: Qualification answer interception ---------- */
+  // Runs BEFORE intent branches, but AFTER pickSlot. If the user is answering
+  // a pending qualification question, advance state and return; otherwise fall
+  // through and let normal intent dispatch handle it (with possible re-prompt).
+  //
+  // Note: we INCLUDE fallback here because qualification answers like
+  // "more bookings" are classified as fallback by detectIntent. The
+  // NO_REPROMPT_INTENTS suppression applies to real anchor intents only
+  // (identity, what_is, human, human_mode, book, day) — fallback gets the
+  // qualification check first, and only falls through if no match.
+  if (
+    !input?.pickSlot &&
+    q?.active &&
+    q.pendingField &&
+    !["identity", "what_is", "human", "human_mode", "book", "day"].includes(kind)
+  ) {
+    // Special case: pending category confirmation (from "do you build for barbers?")
+    if (q.pendingCategoryConfirm) {
+      const yes = /^\s*(yes|yeah|yep|yup|correct|right|that'?s right|exactly|sure)\b/i.test(userText);
+      const no = /^\s*(no|nope|nah|not (really|quite)|different)\b/i.test(userText);
+      if (yes) {
+        const nextField = nextPendingField({ ...q, businessCategory: q.pendingCategoryConfirm });
+        const ask = nextField ? await say(promptForField(nextField), ctx) : "";
+        return {
+          type: "text",
+          text: ask || (await say(copy.qualifyRecommendUnsure, ctx)),
+          qualification: {
+            businessCategory: q.pendingCategoryConfirm,
+            pendingCategoryConfirm: undefined,
+            pendingField: nextField,
+            active: !!nextField,
+          },
+        };
+      }
+      if (no) {
+        const ask = await say(copy.qualifyAskCategory, ctx);
+        return {
+          type: "text",
+          text: ask,
+          qualification: {
+            pendingCategoryConfirm: undefined,
+            pendingField: "businessCategory",
+          },
+        };
+      }
+      // Neither yes nor no — fall through, treat as normal intent
+    }
+
+    const matched = matchQualificationAnswer(userText, q.pendingField);
+    if (matched) {
+      // Build the updated qualification snapshot
+      const updated: QualificationState = { ...q };
+      if (matched !== "__SKIP__") {
+        (updated as any)[q.pendingField] = matched;
+      }
+      const nextField = nextPendingField(updated);
+
+      // All fields collected → recommend a package
+      if (!nextField) {
+        const rec = recommendPackage(updated);
+        const t = await say(rec.message, ctx);
+        return {
+          type: "text",
+          text: t,
+          meta: rec.link ? { link: rec.link } : undefined,
+          qualification: {
+            ...(matched !== "__SKIP__" ? { [q.pendingField]: matched } : {}),
+            recommendedPackage: rec.pkg,
+            pendingField: undefined,
+            active: false,
+          },
+        };
+      }
+
+      // More fields to ask → ask next
+      const t = await say(promptForField(nextField), ctx);
+      return {
+        type: "text",
+        text: t,
+        qualification: {
+          ...(matched !== "__SKIP__" ? { [q.pendingField]: matched } : {}),
+          pendingField: nextField,
+          active: true,
+        },
+      };
+    }
+
+    // No match for pending field. If intent is fallback/identity/etc., let the
+    // normal intent branch handle it without re-prompt accounting. Otherwise,
+    // append a single re-prompt; on 2nd ignore, deactivate qualification.
+    // (Continues to normal intent dispatch below — we annotate state after.)
+  }
 
   /* ---------- Final booking (client passes pickSlot) — phone-only MVP ---------- */
   if (input?.pickSlot) {
@@ -176,7 +521,10 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     else if (cat === "home_trade") { text = `${copy.categoryHomeTrade} ${copy.routeToAudit}`; link = "/website-audit"; }
     else text = `${copy.categoriesOverview} Which one fits your business?`;
     const t = await say(text, ctx);
-    return link ? { type: "text", text: t, meta: { link } } : { type: "text", text: t };
+    const categoryResult: BrainResult = link
+      ? { type: "text", text: t, meta: { link } }
+      : { type: "text", text: t };
+    return await withQualification(categoryResult, kind, ctx, intent);
   }
 
   /* ---------- Pricing ---------- */
@@ -189,20 +537,20 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     else if (tier === "assistant") { text = `${copy.pricingSiteAssistant} ${copy.routeToGetStarted}`; link = "/get-started"; }
     else { text = `${copy.pricingOverview} ${copy.routeToAudit}`; link = "/website-audit"; }
     const t = await say(text, ctx);
-    return { type: "text", text: t, meta: { link } };
+    return await withQualification({ type: "text", text: t, meta: { link } }, kind, ctx, intent);
   }
 
   /* ---------- Audit intent ---------- */
   if (kind === "audit") {
     const text = `${copy.auditPitch} ${copy.auditLink}`;
     const t = await say(text, ctx);
-    return { type: "text", text: t, meta: { link: "/website-audit" } };
+    return await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent);
   }
 
   /* ---------- Assistant upgrade interest ---------- */
   if (kind === "assistant_info") {
     const t = await say(`${copy.assistantStatus}`, ctx);
-    return { type: "text", text: t, meta: { link: "/get-started" } };
+    return await withQualification({ type: "text", text: t, meta: { link: "/get-started" } }, kind, ctx, intent);
   }
 
   /* ---------- Human mode reply — phone / email ---------- */
@@ -320,10 +668,10 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "capability") {
     const text = `${copy.whatIsReplicant} ${copy.categoriesOverview} ${copy.routeToAudit}`;
     const t = await say(text, ctx);
-    return { type: "text", text: t, meta: { link: "/website-audit" } };
+    return await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent);
   }
 
   /* ---------- Soft fallback — never call-pushy ---------- */
   const t = await say(copy.softFallback, ctx);
-  return { type: "text", text: t };
+  return await withQualification({ type: "text", text: t }, kind, ctx, intent);
 }

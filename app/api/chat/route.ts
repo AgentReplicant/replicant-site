@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { brainProcess } from "@/lib/brain";
 import type { BrainCtx } from "@/lib/brain/types";
-import type { PickSlotPayload } from "@/lib/shared/types";
+import type { PickSlotPayload, QualificationState } from "@/lib/shared/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +43,8 @@ export async function POST(req: Request) {
       // FIX #7: Assign directly instead of Object.assign hack — BrainCtx already supports these
       lastUser,
       lastAssistant,
+      // Phase 3B: qualification state from widget (or undefined for fresh chats)
+      qualification: body?.qualification as QualificationState | undefined,
     };
 
     // Input: either a structured booking pick or a user message

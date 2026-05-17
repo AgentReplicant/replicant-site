@@ -5,10 +5,16 @@
 
 export type { Slot, DateFilter } from "@/lib/shared/types";
 
-import type { Slot, DateFilter } from "@/lib/shared/types";
+import type { Slot, DateFilter, QualificationState } from "@/lib/shared/types";
 
 export type BrainResult =
-  | { type: "text"; text: string; meta?: { link?: string } }
+  | {
+      type: "text";
+      text: string;
+      meta?: { link?: string };
+      /** Phase 3B: qualification advancement patch — widget merges into local state. */
+      qualification?: Partial<QualificationState>;
+    }
   | { type: "slots"; text: string; date: DateFilter; slots: Slot[] }
   | { type: "booked"; when?: string }
   | { type: "action"; action: "open_url"; url: string; text?: string }
@@ -23,7 +29,10 @@ export type BrainCtx = {
   date?: DateFilter;
   lead?: { email?: string; phone?: string; name?: string };
 
-  /** NEW: last seen assistant/user turns for repeat guard & clarifiers */
+  /** last seen assistant/user turns for repeat guard & clarifiers */
   lastAssistant?: string;
   lastUser?: string;
+
+  /** Phase 3B: current qualification state from the widget. */
+  qualification?: QualificationState;
 };

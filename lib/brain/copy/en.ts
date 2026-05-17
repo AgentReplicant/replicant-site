@@ -93,4 +93,30 @@ export const copy = {
 
   // ---------- Misc ----------
   linkIntro: "Here's the link:",
+
+  // ---------- Phase 3B: Qualification ----------
+  qualifyOffer:
+    "I can narrow down which package fits best with a couple quick questions — sound good?",
+  qualifyAskCategory:
+    "What kind of business do you run — beauty & grooming (barber, salon, lash, nails), wellness & aesthetics (med spa, massage, fitness, coaching), home & trade services (plumbing, lawncare, HVAC, cleaning, contractors), or something else?",
+  qualifyConfirmCategory: (cat: string) =>
+    `Sounds like ${cat} — is that the type of business you run?`,
+  qualifyAskGoal:
+    "What are you most trying to get more of — bookings, calls, quote requests, consultations, or better online presence?",
+  qualifyAskTimeline:
+    "What's your timeline — ASAP, 1–2 weeks, this month, or just exploring?",
+  qualifyAskBudget:
+    "And what range were you thinking for the website — under $500, $500–$1,000, $1,000–$2,500, or $2,500+?",
+  qualifyRecommendStarter:
+    "Based on that, the Starter Website is probably the best fit — clean mobile-first site, services, photos, contact form, and a booking or quote CTA.",
+  qualifyRecommendBookingQuote:
+    "Based on that, the Booking / Quote Website is probably the best fit — everything in Starter, plus booking platform or quote form integration, reviews, location, and analytics.",
+  qualifyRecommendAssistant:
+    "Based on that, the Website + Replicant Assistant package is the right tier — full website plus an upcoming assistant trained on your services, FAQs, and booking flow.",
+  qualifyRecommendUnderBudget:
+    "Heads up — current website packages start at $750. The free audit is still worth doing if you're serious about improving the site, so we can show you what's possible.",
+  qualifyRecommendUnsure:
+    "Based on what you've shared, I'd recommend starting with the free audit so we can match the right package to your business.",
+  qualifyReprompt: (fieldPrompt: string) =>
+    `Want to keep narrowing down the right package? ${fieldPrompt}`,
 };

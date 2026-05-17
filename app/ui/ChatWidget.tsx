@@ -2,12 +2,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Slot, DateFilter, PickSlotPayload } from "@/lib/shared/types";
+import type { Slot, DateFilter, PickSlotPayload, QualificationState } from "@/lib/shared/types";
 
 type Msg = { role: "bot" | "user"; text: string; meta?: { link?: string } };
 type Hist = { role: "user" | "assistant"; content: string }[];
 
-const STORE_KEY = "replicant_chat_v12";
+const STORE_KEY = "replicant_chat_v13";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 // Non-anchored version for extracting an email from inside a longer message.
 const EMAIL_EXTRACT_RE = /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/i;
@@ -165,6 +165,12 @@ export default function ChatWidget() {
   const historyRef = useRef<Hist>([]);
   const restoredRef = useRef(false);
 
+  // Phase 3B — conversational qualification state. Widget owns persistence;
+  // brain receives it via BrainCtx and returns Partial<QualificationState> patches.
+  const [qualification, setQualification] = useState<QualificationState>({
+    active: false,
+  });
+
   const [sid] = useState(() => {
     const k = "replicant_sid_v1";
     try {
@@ -227,7 +233,10 @@ export default function ChatWidget() {
           ? s.pending
           : null;
       setPending(validPending);
-
+      // Phase 3B: restore qualification with shape sanity check
+      if (s.qualification && typeof s.qualification === "object" && typeof s.qualification.active === "boolean") {
+        setQualification(s.qualification as QualificationState);
+      }
       if (restoredMessages.length > 0) {
         historyRef.current = restoredMessages.map((m) => ({
           role: m.role === "user" ? "user" : "assistant",
@@ -245,7 +254,7 @@ export default function ChatWidget() {
         STORE_KEY,
         JSON.stringify({
           messages, email, phone, name, date, page,
-          lastSlots, chosenSlot, pending,
+          lastSlots, chosenSlot, pending, qualification,
         })
       );
     } catch {}
@@ -353,10 +362,13 @@ export default function ChatWidget() {
       date: useDate ? { y: useDate.y, m: useDate.m, d: useDate.d } : undefined,
       page: usePage,
     };
+    // Phase 3B: send current qualification snapshot so brain can decide next move
+    const qualificationSnapshot = qualification;
     const body = {
       ...payload,
       history: historyRef.current,
       filters,
+      qualification: qualificationSnapshot,
       sessionId: `${sid}:${convoSeed}`,
       email,
       phone,
@@ -419,6 +431,48 @@ export default function ChatWidget() {
 
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
+
+    // Phase 3B: Merge qualification patches from brain into local state.
+    // Runs before type-specific branches so all paths see the updated state.
+    if (data?.qualification && typeof data.qualification === "object") {
+      const patch = data.qualification as Partial<QualificationState>;
+      setQualification((prev) => {
+        const merged: QualificationState = { ...prev, ...patch };
+        // If we have contact info, upsert any newly-set qualification fields to Airtable.
+        const contactKnown = !!(email || phone);
+        if (contactKnown) {
+          const fieldsToWrite: Record<string, string> = {};
+          (Object.keys(patch) as (keyof QualificationState)[]).forEach((k) => {
+            if (
+              (k === "businessCategory" ||
+                k === "mainGoal" ||
+                k === "desiredTimeline" ||
+                k === "budgetRange" ||
+                k === "recommendedPackage") &&
+              typeof patch[k] === "string"
+            ) {
+              fieldsToWrite[k] = patch[k] as string;
+            }
+          });
+          if (Object.keys(fieldsToWrite).length > 0) {
+            void fetch("/api/lead", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                email,
+                phone,
+                name,
+                ...fieldsToWrite,
+                interestType: "Website",
+                source: "Chat - Replicant",
+                status: merged.recommendedPackage ? "Qualified" : undefined,
+              }),
+            }).catch(() => {});
+          }
+        }
+        return merged;
+      });
+    }
 
     if (data?.type === "action" && data.action === "open_url" && data.url) {
       appendBot(data.text || "Here's the link:");

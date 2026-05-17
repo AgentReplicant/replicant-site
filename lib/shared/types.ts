@@ -35,3 +35,38 @@ export type PickSlotPayload = {
   phone: string;
   name?: string;
 };
+
+/**
+ * Phase 3B — conversational lead qualification.
+ *
+ * The widget owns persistence (localStorage). The brain receives the current
+ * state via BrainCtx.qualification and may return a Partial<QualificationState>
+ * patch on its BrainResult, which the widget merges back into state.
+ *
+ * Field values use the canonical Airtable single-select strings (Phase 3A schema)
+ * so they can be written through LeadPayload without translation.
+ */
+export type QualificationField =
+  | "businessCategory"
+  | "mainGoal"
+  | "desiredTimeline"
+  | "budgetRange";
+
+export type QualificationState = {
+  /** Is Riley actively trying to qualify this user? Set false when complete or after re-prompt fatigue. */
+  active: boolean;
+  /** Canonical Airtable values; see lib/airtable/leads.ts LeadPayload for matching keys. */
+  businessCategory?: string;
+  mainGoal?: string;
+  desiredTimeline?: string;
+  budgetRange?: string;
+  recommendedPackage?: string;
+  /** Which field is Riley waiting for next. Null/undefined once recommendation is made. */
+  pendingField?: QualificationField;
+  /** Categories inferred from a generic question (e.g. "do you build for barbers?") that need user confirmation before being written. */
+  pendingCategoryConfirm?: string;
+  /** Re-prompt accounting. After 1 ignored re-prompt, qualification.active flips to false. */
+  repromptCount?: number;
+  /** Which fields have already been upserted to Airtable. Avoids redundant writes. */
+  upsertedFields?: QualificationField[];
+};

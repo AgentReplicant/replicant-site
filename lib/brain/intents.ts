@@ -1,5 +1,7 @@
 // lib/brain/intents.ts
 
+import type { QualificationField } from "@/lib/shared/types";
+
 export type Intent =
   | { kind: "book" }
   | { kind: "day"; word: string; partOfDay?: "morning" | "afternoon" | "evening" }
@@ -49,10 +51,10 @@ const ASSISTANT_RE =
   /\b(assistant|ai assistant|chatbot|ai upgrade|automation|automated|add-on|addon)\b/i;
 
 // Pricing — overview and specific tiers
-const PRICING_RE = /\b(price|pricing|cost|how much|fee|fees|rates?|charge)\b/i;
-const PRICING_STARTER_RE = /\b(starter|cheap(?:est)?|basic|simple|just (?:a )?site)\b/i;
-const PRICING_BOOKING_RE = /\b(booking|quote|middle|recommended)\b/i;
-const PRICING_ASSISTANT_RE = /\b(assistant|site \+ assistant|with (?:an? )?assistant)\b/i;
+const PRICING_RE = /\b(price|pricing|cost|how much|fee|fees|rates?|charge|package|packages|included|whats in|what'?s in|tier|tiers|plan|plans)\b|\$\s?\d{2,4}/i;
+const PRICING_STARTER_RE = /\b(starter|cheap(?:est)?|basic|simple|just (?:a )?site)\b|\$?\s?750\b/i;
+const PRICING_BOOKING_RE = /\b(booking|quote|middle|recommended)\b|\$?\s?1[,.]?250\b|\$?\s?1[,.]?000\b/i;
+const PRICING_ASSISTANT_RE = /\b(assistant|site \+ assistant|with (?:an? )?assistant)\b|\$?\s?2[,.]?000\b/i;
 
 // Category questions
 const CAT_BEAUTY_RE =
@@ -153,4 +155,104 @@ export function detectIntent(text: string): Intent {
   if (CAPABILITY_RE.test(low)) return { kind: "capability" };
 
   return { kind: "fallback" };
+}
+
+/* ---------- Phase 3B: Qualification answer matcher ---------- */
+
+/** Skip / opt-out phrases — applied across all fields. */
+const QUAL_SKIP_RE = /\b(skip|not sure|i ?don'?t know|no idea|not now|dunno|whatever)\b/i;
+
+/** Per-field answer detection. Returns canonical Airtable single-select value or null. */
+function matchBusinessCategory(text: string): string | null {
+  const t = text.toLowerCase();
+  if (/\b(barber|salon|braid|lash|nail|hair|stylist|grooming|beauty)\b/.test(t)) return "Beauty & Grooming";
+  if (/\b(spa|massage|wellness|fitness|coach|aesthetic|med ?spa|therap)\b/.test(t)) return "Wellness & Aesthetics";
+  if (/\b(plumb|hvac|lawn|landscap|clean|contract|handy|trade|pressure ?wash|roof|electric|paint)\b/.test(t)) return "Home & Trade Services";
+  if (/\b(other|something else|none|different)\b/.test(t)) return "Other";
+  return null;
+}
+
+function matchMainGoal(text: string): string | null {
+  const t = text.toLowerCase();
+  if (/\b(more bookings?|book(ing)?s?|appointment)\b/.test(t)) return "More bookings";
+  if (/\b(more calls?|phone calls?|ringing)\b/.test(t)) return "More calls";
+  if (/\b(quotes?|estimates?|quote requests?)\b/.test(t)) return "More quote requests";
+  if (/\b(consultation|consult)\b/.test(t)) return "More consultations";
+  if (/\b(presence|visibility|visible|found|google|seo|online)\b/.test(t)) return "Better online presence";
+  return null;
+}
+
+function matchDesiredTimeline(text: string): string | null {
+  const t = text.toLowerCase();
+  if (/\b(asap|right now|immediately|urgent|today|this week)\b/.test(t)) return "ASAP";
+  if (/\b(1.?2 ?weeks?|two weeks?|week or two|couple weeks?)\b/.test(t)) return "1–2 weeks";
+  if (/\b(this month|by end of month|within (the )?month)\b/.test(t)) return "This month";
+  if (/\b(explor|brows|just (lookin|seeing|checking)|curious|window|no rush)\b/.test(t)) return "Just exploring";
+  return null;
+}
+
+function matchBudgetRange(text: string): string | null {
+  const t = text.toLowerCase();
+
+  // Keyword/phrase matchers first
+  if (/\b(under \$?500|less than \$?500|cheap|nothing|small budget|tight)\b/.test(t)) return "Under $500";
+  if (/\$?500\s*(to|-|–)\s*\$?1[,.]?000|five hundred/.test(t)) return "$500–$1,000";
+  if (/\$?1[,.]?000\s*(to|-|–)\s*\$?2[,.]?500|\bone thousand\b/.test(t)) return "$1,000–$2,500";
+  if (/\$?2[,.]?500\+|more than \$?2[,.]?000|premium|whatever it takes/.test(t)) return "$2,500+";
+
+  // Numeric fallback — extract any dollar-ish number, normalize "1k" / "2.5k", bucket it
+  // Matches: "1500", "$1500", "$1,500", "1500 bucks", "around 1.5k", "2k", "2.5k"
+  let n: number | null = null;
+  const kMatch = t.match(/\$?\s*(\d+(?:\.\d+)?)\s*k\b/);
+  if (kMatch) {
+    n = parseFloat(kMatch[1]) * 1000;
+  } else {
+    const numMatch = t.match(/\$?\s*(\d{1,2}[,.]?\d{3}|\d{3,5})\b/);
+    if (numMatch) {
+      n = parseInt(numMatch[1].replace(/[,.]/g, ""), 10);
+    }
+  }
+  if (n !== null && n > 0) {
+    if (n < 500) return "Under $500";
+    if (n < 1000) return "$500–$1,000";
+    if (n < 2500) return "$1,000–$2,500";
+    return "$2,500+";
+  }
+
+  return null;
+}
+
+/**
+ * Try to match the user's text against the currently-pending qualification field.
+ * Returns the canonical Airtable value, or "__SKIP__" for skip phrases, or null if no match.
+ */
+export function matchQualificationAnswer(
+  text: string,
+  pendingField: QualificationField
+): string | null {
+  if (!text || !text.trim()) return null;
+
+  // Skip phrases are universal
+  if (QUAL_SKIP_RE.test(text)) {
+    switch (pendingField) {
+      case "businessCategory":
+        return "Other";
+      case "desiredTimeline":
+        return "Just exploring";
+      case "mainGoal":
+      case "budgetRange":
+        return "__SKIP__";
+    }
+  }
+
+  switch (pendingField) {
+    case "businessCategory":
+      return matchBusinessCategory(text);
+    case "mainGoal":
+      return matchMainGoal(text);
+    case "desiredTimeline":
+      return matchDesiredTimeline(text);
+    case "budgetRange":
+      return matchBudgetRange(text);
+  }
 }
