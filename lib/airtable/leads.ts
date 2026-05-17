@@ -122,9 +122,15 @@ export async function findLeadByEmailOrPhone(args: {
   const phone = normalizePhone(args.phone);
   if (!email && !phone) return null;
 
-  const formula = email
-    ? `LOWER({Email})="${email.toLowerCase()}"`
-    : `{Phone}="${phone}"`;
+  // Match by either email OR phone — never collapse them. Without this, an email-bearing
+  // payload would skip the phone lookup entirely and create a duplicate row when a
+  // phone-only row already exists for the same lead (booking flow: phone turn -> row,
+  // email turn -> duplicate row).
+  const conditions: string[] = [];
+  if (email) conditions.push(`LOWER({Email})="${email.toLowerCase()}"`);
+  if (phone) conditions.push(`{Phone}="${phone}"`);
+  const formula =
+    conditions.length > 1 ? `OR(${conditions.join(",")})` : conditions[0];
 
   const url =
     `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE)}` +
