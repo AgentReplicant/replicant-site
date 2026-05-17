@@ -128,7 +128,17 @@ export async function findLeadByEmailOrPhone(args: {
   // email turn -> duplicate row).
   const conditions: string[] = [];
   if (email) conditions.push(`LOWER({Email})="${email.toLowerCase()}"`);
-  if (phone) conditions.push(`{Phone}="${phone}"`);
+  if (phone) {
+    // Airtable phoneNumber field returns FORMATTED strings in formulas ("(555) 977-7111"),
+    // not digits-only. Strip common formatting chars from {Phone} before comparing to
+    // our normalized digits-only phone. Without this, phone lookup never matches and
+    // every email-bearing follow-up turn creates a duplicate row.
+    // Each SUBSTITUTE(text, "X", "") removes character X. Nested to handle multiple.
+    const phoneDigitsOnly =
+      `SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(` +
+      `{Phone},"-",""),"(",""),")",""),"+",""),".","")," ","")`;
+    conditions.push(`${phoneDigitsOnly}="${phone}"`);
+  }
   const formula =
     conditions.length > 1 ? `OR(${conditions.join(",")})` : conditions[0];
 
