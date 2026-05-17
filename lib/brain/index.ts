@@ -163,6 +163,17 @@ const NO_REPROMPT_INTENTS = new Set([
   "fallback",
 ]);
 
+/** Detect whether a message contains an email or 7+ digit phone number. */
+const CONTACT_EMAIL_RE = /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/i;
+const CONTACT_PHONE_RE = /(\+?\d[\d\s().-]{6,}\d)/;
+function containsContactInfo(text: string): boolean {
+  if (!text) return false;
+  if (CONTACT_EMAIL_RE.test(text)) return true;
+  const m = text.match(CONTACT_PHONE_RE);
+  if (m && m[1].replace(/[^\d]/g, "").length >= 7) return true;
+  return false;
+}
+
 /** Map category intent values to canonical Airtable Business Category single-select values. */
 function categoryIntentToAirtable(cat: string): string | null {
   if (cat === "beauty") return "Beauty & Grooming";
@@ -330,6 +341,30 @@ async function withQualification(
         qualification: { active: true, pendingField: nextField, ...qualificationPatch },
       };
     }
+  }
+
+  // Case 4: qualification active+pending AND user provided contact info (email/phone)
+  // in a fallback-classified message. Acknowledge the contact, keep qualification
+  // active, re-ask the pending field. Returns a qualification patch (same pendingField)
+  // so the widget's contact-aware upsert fires with all collected qualification fields.
+  //
+  // Soft acknowledgment — NOT a "thanks, someone will follow up" hard stop. The user
+  // is still in qualification flow; they just dropped contact info mid-stream.
+  if (
+    q?.active &&
+    q.pendingField &&
+    kind === "fallback" &&
+    containsContactInfo(ctx.lastUser || "")
+  ) {
+    const fieldPrompt = q.pendingCategoryConfirm
+      ? copy.qualifyConfirmCategory(q.pendingCategoryConfirm)
+      : promptForField(q.pendingField);
+    const ack = await say(`Got it — I'll save that. ${fieldPrompt}`, ctx);
+    return {
+      type: "text",
+      text: ack,
+      qualification: { active: true, pendingField: q.pendingField },
+    };
   }
 
   // Case 3: qualification active+pending AND a trigger intent fired.

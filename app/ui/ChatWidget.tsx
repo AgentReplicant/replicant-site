@@ -324,6 +324,18 @@ export default function ChatWidget() {
       if (nameMatch && !name) setName(nameMatch);
 
       if (!emailMatch && phoneDigits.length < 7 && !nameMatch) return;
+
+      // Phase 3B: if qualification has collected fields, include them in this upsert.
+      // Status stays "New Lead" unless qualification already reached a recommendation
+      // (the qualification-patch upsert path handles "Qualified" when recommendedPackage lands).
+      const qualFields: Record<string, string> = {};
+      if (qualification.businessCategory) qualFields.businessCategory = qualification.businessCategory;
+      if (qualification.mainGoal) qualFields.mainGoal = qualification.mainGoal;
+      if (qualification.desiredTimeline) qualFields.desiredTimeline = qualification.desiredTimeline;
+      if (qualification.budgetRange) qualFields.budgetRange = qualification.budgetRange;
+      if (qualification.recommendedPackage) qualFields.recommendedPackage = qualification.recommendedPackage;
+      const hasQualFields = Object.keys(qualFields).length > 0;
+
       await fetch("/api/lead", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -332,6 +344,7 @@ export default function ChatWidget() {
           email: emailMatch,
           phone: phoneDigits || undefined,
           source: "Chat - Replicant",
+          ...(hasQualFields ? { ...qualFields, interestType: "Website" } : {}),
         }),
       });
     } catch {}
