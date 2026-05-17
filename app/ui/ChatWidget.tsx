@@ -325,6 +325,17 @@ export default function ChatWidget() {
 
       if (!emailMatch && phoneDigits.length < 7 && !nameMatch) return;
 
+      // Send merged contact info (current state + new extracts) so the adapter
+      // can find an existing row by EITHER email OR phone — prevents duplicate
+      // rows when phone is captured in one turn and email in another (booking flow).
+      const effectiveEmail = emailMatch || email;
+      const effectivePhone = phoneDigits || phone;
+      const effectiveName = nameMatch || name;
+
+      // Safety guard: don't /api/lead a name-only message with no contact info
+      // (route rejects rows lacking email or phone, would 400 noisily).
+      if (!effectiveEmail && (!effectivePhone || effectivePhone.length < 7)) return;
+
       // Phase 3B: if qualification has collected fields, include them in this upsert.
       // Status stays "New Lead" unless qualification already reached a recommendation
       // (the qualification-patch upsert path handles "Qualified" when recommendedPackage lands).
@@ -340,9 +351,9 @@ export default function ChatWidget() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: nameMatch,
-          email: emailMatch,
-          phone: phoneDigits || undefined,
+          name: effectiveName,
+          email: effectiveEmail,
+          phone: effectivePhone || undefined,
           source: "Chat - Replicant",
           ...(hasQualFields ? { ...qualFields, interestType: "Website" } : {}),
         }),
