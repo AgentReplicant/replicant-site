@@ -7,6 +7,7 @@ import type {
   PickSlotPayload,
   QualificationField,
   QualificationState,
+  LeadProfile,
 } from "@/lib/shared/types";
 
 /* ---------- Part-of-day windows (ET) ---------- */
@@ -274,6 +275,32 @@ function recommendPackage(q: QualificationState): {
 }
 
 /**
+ * Phase 6: Build a returning-user welcome line based on what's known.
+ * NEVER mentions internal status. Uses category + package when available;
+ * falls back to status-only or generic.
+ */
+function buildReturningGreeting(profile: LeadProfile): string {
+  const cat = profile.businessCategory?.toLowerCase();
+  const pkg = profile.recommendedPackage;
+  const hasRealPackage = pkg && pkg !== "Not Sure Yet";
+
+  if (hasRealPackage && cat) {
+    return `Welcome back — last time you were looking at the ${pkg} for a ${cat} business.`;
+  }
+  if (cat) {
+    return `Welcome back — last time you mentioned you're in ${cat}.`;
+  }
+  if (hasRealPackage) {
+    return `Welcome back — last time you were looking at the ${pkg}.`;
+  }
+  if (profile.status) {
+    // Status is useful but no category/package — generic but warmer than bare "Welcome back."
+    return copy.returningWelcomeStatusOnly;
+  }
+  return copy.returningWelcomeGeneric;
+}
+
+/**
  * Post-process an intent branch's BrainResult, attaching qualification behavior:
  *  - If intent is a TRIGGER and qualification isn't active yet → append opener, set active.
  *  - If qualification is active+pending and intent is NON-trigger NON-suppressed →
@@ -421,6 +448,57 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   const kind: string = (intent as any)?.kind;
   const q = ctx.qualification;
 
+  /* ---------- Phase 6: Seed qualification from returning-user profile ---------- */
+  // If we have a useful profile AND qualification isn't already active with data,
+  // seed qualification with known values. Widget-state wins over profile (user's
+  // current explicit answers take priority). Does NOT set active=true — that
+  // still requires a trigger intent to fire below.
+  if (ctx.leadProfile?.isUseful && !q?.active) {
+    const lp = ctx.leadProfile;
+    const seeded: QualificationState = {
+      active: false,
+      businessCategory: q?.businessCategory ?? lp.businessCategory,
+      mainGoal: q?.mainGoal ?? lp.mainGoal,
+      desiredTimeline: q?.desiredTimeline ?? lp.desiredTimeline,
+      budgetRange: q?.budgetRange ?? lp.budgetRange,
+      recommendedPackage: q?.recommendedPackage ?? lp.recommendedPackage,
+    };
+    // Mutate ctx in place so downstream qualification logic sees the seed.
+    ctx.qualification = seeded;
+  }
+
+  /* ---------- Phase 6: Category override mid-flow ---------- */
+  // If category intent fires and we have a different businessCategory already
+  // (from profile seed or earlier turn), overwrite explicitly. Riley acknowledges
+  // the change briefly so the user knows we caught it. Hybrid rule from Phase 3B
+  // still applies (first-person framing required for silent overwrite; generic
+  // questions go through the confirm path).
+  if (
+    kind === "category" &&
+    (intent as any)?.category &&
+    (intent as any).category !== "overview"
+  ) {
+    const newCat = categoryIntentToAirtable((intent as any).category);
+    const currentCat = ctx.qualification?.businessCategory;
+    if (
+      newCat &&
+      currentCat &&
+      newCat !== currentCat &&
+      ctx.lastUser &&
+      isFirstPersonBusinessFraming(ctx.lastUser)
+    ) {
+      // Mutate the seed/state so the standard category branch reflects new value,
+      // AND mark this for the category branch to prepend an acknowledgment line.
+      // We pass info via a synthetic ctx field; brain reads it below.
+      (ctx as any).__categoryOverride = newCat;
+      // Pre-update qualification state so seed reflects current truth.
+      ctx.qualification = {
+        ...(ctx.qualification ?? { active: false }),
+        businessCategory: newCat,
+      };
+    }
+  }
+
   /* ---------- Phase 3B: Qualification answer interception ---------- */
   // Runs BEFORE intent branches, but AFTER pickSlot. If the user is answering
   // a pending qualification question, advance state and return; otherwise fall
@@ -543,7 +621,10 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   /* ---------- "What is Replicant?" ---------- */
   if (kind === "what_is") {
     const t = await say(`${copy.whatIsReplicant} ${copy.routeToAudit}`, ctx);
-    return { type: "text", text: t, meta: { link: "/website-audit" } };
+    return await withMemory(
+      { type: "text", text: t, meta: { link: "/website-audit" } },
+      ctx
+    );
   }
 
   /* ---------- Categories ---------- */
@@ -559,7 +640,10 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     const categoryResult: BrainResult = link
       ? { type: "text", text: t, meta: { link } }
       : { type: "text", text: t };
-    return await withQualification(categoryResult, kind, ctx, intent);
+    return await withMemory(
+      await withQualification(categoryResult, kind, ctx, intent),
+      ctx
+    );
   }
 
   /* ---------- Pricing ---------- */
@@ -572,20 +656,29 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
     else if (tier === "assistant") { text = `${copy.pricingSiteAssistant} ${copy.routeToGetStarted}`; link = "/get-started"; }
     else { text = `${copy.pricingOverview} ${copy.routeToAudit}`; link = "/website-audit"; }
     const t = await say(text, ctx);
-    return await withQualification({ type: "text", text: t, meta: { link } }, kind, ctx, intent);
+    return await withMemory(
+      await withQualification({ type: "text", text: t, meta: { link } }, kind, ctx, intent),
+      ctx
+    );
   }
 
   /* ---------- Audit intent ---------- */
   if (kind === "audit") {
     const text = `${copy.auditPitch} ${copy.auditLink}`;
     const t = await say(text, ctx);
-    return await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent);
+    return await withMemory(
+      await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent),
+      ctx
+    );
   }
 
   /* ---------- Assistant upgrade interest ---------- */
   if (kind === "assistant_info") {
     const t = await say(`${copy.assistantStatus}`, ctx);
-    return await withQualification({ type: "text", text: t, meta: { link: "/get-started" } }, kind, ctx, intent);
+    return await withMemory(
+      await withQualification({ type: "text", text: t, meta: { link: "/get-started" } }, kind, ctx, intent),
+      ctx
+    );
   }
 
   /* ---------- Human mode reply — phone / email ---------- */
@@ -703,10 +796,65 @@ export async function brainProcess(input: any, ctx: BrainCtx): Promise<BrainResu
   if (kind === "capability") {
     const text = `${copy.whatIsReplicant} ${copy.categoriesOverview} ${copy.routeToAudit}`;
     const t = await say(text, ctx);
-    return await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent);
+    return await withMemory(
+      await withQualification({ type: "text", text: t, meta: { link: "/website-audit" } }, kind, ctx, intent),
+      ctx
+    );
   }
 
   /* ---------- Soft fallback — never call-pushy ---------- */
   const t = await say(copy.softFallback, ctx);
-  return await withQualification({ type: "text", text: t }, kind, ctx, intent);
+  return await withMemory(
+    await withQualification({ type: "text", text: t }, kind, ctx, intent),
+    ctx
+  );
+}
+
+/**
+ * Phase 6: Final post-processor — prepend returning-user greeting (once per session)
+ * and prepend category-override acknowledgment (when present).
+ * Operates only on { type: "text" } results. Other types pass through.
+ *
+ * Order in the output text:
+ *   [welcome-back] [category-override-ack] [normal response]
+ *
+ * Sets memoryAcknowledged=true on the result so widget flips its flag.
+ */
+async function withMemory(result: BrainResult, ctx: BrainCtx): Promise<BrainResult> {
+  if (result.type !== "text") return result;
+
+  const prepends: string[] = [];
+  let signalAck = false;
+  let categoryPatch: { businessCategory: string } | undefined;
+
+  // Welcome-back (once per session, only when profile is useful)
+  if (ctx.leadProfile?.isUseful && !ctx.memoryAcknowledged) {
+    prepends.push(buildReturningGreeting(ctx.leadProfile));
+    signalAck = true;
+  }
+
+  // Category override acknowledgment (single-turn flag set during ctx assembly).
+  // MUST emit a qualification patch so the widget persists the new category
+  // and upserts to Airtable. Without this, Riley says "got it" but the data
+  // doesn't actually change.
+  const override = (ctx as any).__categoryOverride as string | undefined;
+  if (override) {
+    prepends.push(copy.qualifyCategoryOverride(override));
+    categoryPatch = { businessCategory: override };
+  }
+
+  if (prepends.length === 0 && !signalAck && !categoryPatch) return result;
+
+  const prefix = prepends.join(" ");
+  // Merge any existing qualification patch on result with the category override patch.
+  const mergedQualification = categoryPatch
+    ? { ...(result.qualification ?? {}), ...categoryPatch }
+    : result.qualification;
+
+  return {
+    ...result,
+    text: prefix ? `${prefix} ${result.text}` : result.text,
+    ...(mergedQualification ? { qualification: mergedQualification } : {}),
+    ...(signalAck ? { memoryAcknowledged: true } : {}),
+  };
 }

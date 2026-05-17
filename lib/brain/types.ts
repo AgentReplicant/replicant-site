@@ -5,7 +5,12 @@
 
 export type { Slot, DateFilter } from "@/lib/shared/types";
 
-import type { Slot, DateFilter, QualificationState } from "@/lib/shared/types";
+import type {
+  Slot,
+  DateFilter,
+  QualificationState,
+  LeadProfile,
+} from "@/lib/shared/types";
 
 export type BrainResult =
   | {
@@ -14,6 +19,8 @@ export type BrainResult =
       meta?: { link?: string };
       /** Phase 3B: qualification advancement patch — widget merges into local state. */
       qualification?: Partial<QualificationState>;
+      /** Phase 6: signals widget to set memoryAcknowledged=true. */
+      memoryAcknowledged?: boolean;
     }
   | { type: "slots"; text: string; date: DateFilter; slots: Slot[] }
   | { type: "booked"; when?: string }
@@ -35,4 +42,10 @@ export type BrainCtx = {
 
   /** Phase 3B: current qualification state from the widget. */
   qualification?: QualificationState;
+
+  /** Phase 6: returning-user profile loaded by chat route from Airtable. */
+  leadProfile?: LeadProfile;
+
+  /** Phase 6: widget has already shown welcome-back this session. */
+  memoryAcknowledged?: boolean;
 };

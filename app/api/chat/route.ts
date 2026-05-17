@@ -2,7 +2,12 @@
 import { NextResponse } from "next/server";
 import { brainProcess } from "@/lib/brain";
 import type { BrainCtx } from "@/lib/brain/types";
-import type { PickSlotPayload, QualificationState } from "@/lib/shared/types";
+import type {
+  PickSlotPayload,
+  QualificationState,
+  LeadProfile,
+} from "@/lib/shared/types";
+import { findLeadByEmailOrPhone, toLeadProfile } from "@/lib/airtable/leads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,6 +31,26 @@ export async function POST(req: Request) {
       if (lastUser && lastAssistant) break;
     }
 
+    // Phase 6: returning-user lookup. Fetch whenever contact exists — leadProfile
+    // is used for BOTH welcome-back (gated by memoryAcknowledged) AND qualification
+    // seeding (needed every turn so Riley keeps skipping already-known fields).
+    // Gating by memoryAcknowledged would starve the brain of profile context after
+    // the first greeting. Failures are silent.
+    let leadProfile: LeadProfile | undefined;
+    const hasContact = !!(body?.email || body?.phone);
+    const memoryAcknowledged = !!body?.memoryAcknowledged;
+    if (hasContact) {
+      try {
+        const record = await findLeadByEmailOrPhone({
+          email: body?.email,
+          phone: body?.phone,
+        });
+        if (record) leadProfile = toLeadProfile(record);
+      } catch {
+        // Silent fail — no memory context this turn
+      }
+    }
+
     // Core context
     const ctx: BrainCtx = {
       channel: "web",
@@ -45,6 +70,9 @@ export async function POST(req: Request) {
       lastAssistant,
       // Phase 3B: qualification state from widget (or undefined for fresh chats)
       qualification: body?.qualification as QualificationState | undefined,
+      // Phase 6: returning-user memory
+      leadProfile,
+      memoryAcknowledged,
     };
 
     // Input: either a structured booking pick or a user message

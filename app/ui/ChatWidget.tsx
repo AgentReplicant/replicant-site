@@ -171,6 +171,10 @@ export default function ChatWidget() {
     active: false,
   });
 
+  // Phase 6 — returning-user memory. Set true after Riley delivers welcome-back;
+  // resets when contact email/phone changes (handled in maybeUpsertLeadFromText).
+  const [memoryAcknowledged, setMemoryAcknowledged] = useState(false);
+
   const [sid] = useState(() => {
     const k = "replicant_sid_v1";
     try {
@@ -237,6 +241,10 @@ export default function ChatWidget() {
       if (s.qualification && typeof s.qualification === "object" && typeof s.qualification.active === "boolean") {
         setQualification(s.qualification as QualificationState);
       }
+      // Phase 6: restore memory-acknowledgment flag
+      if (typeof s.memoryAcknowledged === "boolean") {
+        setMemoryAcknowledged(s.memoryAcknowledged);
+      }
       if (restoredMessages.length > 0) {
         historyRef.current = restoredMessages.map((m) => ({
           role: m.role === "user" ? "user" : "assistant",
@@ -254,7 +262,7 @@ export default function ChatWidget() {
         STORE_KEY,
         JSON.stringify({
           messages, email, phone, name, date, page,
-          lastSlots, chosenSlot, pending, qualification,
+          lastSlots, chosenSlot, pending, qualification, memoryAcknowledged,
         })
       );
     } catch {}
@@ -319,8 +327,14 @@ export default function ChatWidget() {
       const phoneDigits = onlyDigits(phoneMatchRaw || "");
       const nameMatch = (text.match(NAME_RE) || [])[1];
 
-      if (emailMatch && !email) setEmail(emailMatch);
-      if (phoneDigits.length >= 7 && !phone) setPhone(phoneDigits);
+      if (emailMatch && !email) {
+        setEmail(emailMatch);
+        setMemoryAcknowledged(false); // new contact → re-allow greeting on next turn
+      }
+      if (phoneDigits.length >= 7 && !phone) {
+        setPhone(phoneDigits);
+        setMemoryAcknowledged(false);
+      }
       if (nameMatch && !name) setName(nameMatch);
 
       if (!emailMatch && phoneDigits.length < 7 && !nameMatch) return;
@@ -393,6 +407,7 @@ export default function ChatWidget() {
       history: historyRef.current,
       filters,
       qualification: qualificationSnapshot,
+      memoryAcknowledged,
       sessionId: `${sid}:${convoSeed}`,
       email,
       phone,
@@ -455,6 +470,11 @@ export default function ChatWidget() {
 
   async function handleBrainResult(data: any) {
     if (data?.email) setEmail(data.email);
+
+    // Phase 6: Brain signaled returning-user greeting was delivered.
+    if (data?.memoryAcknowledged === true) {
+      setMemoryAcknowledged(true);
+    }
 
     // Phase 3B: Merge qualification patches from brain into local state.
     // Runs before type-specific branches so all paths see the updated state.

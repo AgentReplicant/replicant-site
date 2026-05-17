@@ -70,3 +70,34 @@ export type QualificationState = {
   /** Which fields have already been upserted to Airtable. Avoids redundant writes. */
   upsertedFields?: QualificationField[];
 };
+
+/**
+ * Phase 6 — Returning-User Memory.
+ *
+ * Subset of LeadPayload safe to surface to the brain for personalization.
+ * Excludes CRM-internal fields (Notes, StripePaymentId, Source, Conversations).
+ *
+ * `isUseful` is computed by lib/airtable/leads.toLeadProfile() based on:
+ *   A) any qualification-grade field is populated
+ *   B) status is in the "useful for welcome-back" set
+ *
+ * Riley uses `isUseful` to gate the returning-user greeting and uses individual
+ * fields to skip already-answered qualification questions. Status itself is
+ * NEVER surfaced in user-facing copy — it only affects gating logic.
+ */
+export type LeadProfile = {
+  name?: string;
+  businessName?: string;
+  email?: string;
+  phone?: string;
+  businessCategory?: string;
+  mainGoal?: string;
+  desiredTimeline?: string;
+  budgetRange?: string;
+  recommendedPackage?: string;
+  interestType?: string;
+  /** Internal — gates welcome-back eligibility. Never spoken by Riley. */
+  status?: string;
+  /** True if profile has qualification-grade data OR a useful status. */
+  isUseful: boolean;
+};

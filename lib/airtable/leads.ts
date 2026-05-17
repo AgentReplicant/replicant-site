@@ -214,3 +214,65 @@ export async function upsertLead(payload: LeadPayload): Promise<{ id: string; mo
   const id = await createLead(payload);
   return { id, mode: "created" };
 }
+
+// ---------- Phase 6: Returning-user profile mapper ----------
+
+/**
+ * Status values that warrant a returning-user welcome even when qualification
+ * fields are sparse. "New Lead" and "Disqualified" are intentionally excluded
+ * — they don't represent meaningful prior context.
+ */
+const USEFUL_STATUSES = new Set([
+  "Qualified",
+  "Needs Follow-Up",
+  "Audit Requested",
+  "Audit Sent",
+  "Call Requested",
+  "Proposal Sent",
+  "Won",
+  "Beta Client",
+  "Website In Progress",
+  "Website Delivered",
+  "Assistant Upsell Offered",
+]);
+
+/**
+ * Map an Airtable lead record to a LeadProfile safe to surface to the brain.
+ * Excludes CRM-internal fields (Notes, StripePaymentId, Source, Conversations,
+ * Created Time, etc.). The `status` field is included for gating logic but is
+ * never spoken by Riley.
+ *
+ * isUseful = true if EITHER:
+ *   - profile has qualification-grade data (category, business name, goal,
+ *     budget, OR a real recommendedPackage other than "Not Sure Yet")
+ *   - status is in USEFUL_STATUSES
+ */
+export function toLeadProfile(
+  record: AirtableLeadRecord
+): import("@/lib/shared/types").LeadProfile {
+  const f = record.fields;
+  const profile: import("@/lib/shared/types").LeadProfile = {
+    name: f["Name"] || undefined,
+    businessName: f["Business Name"] || undefined,
+    email: f["Email"] || undefined,
+    phone: f["Phone"] || undefined,
+    businessCategory: f["Business Category"] || undefined,
+    mainGoal: f["Main Goal"] || undefined,
+    desiredTimeline: f["Desired Timeline"] || undefined,
+    budgetRange: f["Budget Range"] || undefined,
+    recommendedPackage: f["Recommended Package"] || undefined,
+    interestType: f["Interest Type"] || undefined,
+    status: f["Status"] || undefined,
+    isUseful: false,
+  };
+  const hasQualData = !!(
+    profile.businessCategory ||
+    profile.businessName ||
+    profile.mainGoal ||
+    profile.budgetRange ||
+    (profile.recommendedPackage && profile.recommendedPackage !== "Not Sure Yet")
+  );
+  const hasUsefulStatus = !!(profile.status && USEFUL_STATUSES.has(profile.status));
+  profile.isUseful = hasQualData || hasUsefulStatus;
+  return profile;
+}
