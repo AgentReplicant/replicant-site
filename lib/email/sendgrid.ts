@@ -72,3 +72,60 @@ export async function sendCustomerCallConfirmation(
     console.warn("[sendgrid] error", e?.message || e);
   }
 }
+
+export type AdminPaymentNotificationArgs = {
+  to: string;
+  customerName?: string;
+  customerEmail: string;
+  sessionId: string;
+};
+
+/**
+ * Notify admin of a completed Stripe payment.
+ * Best-effort: try/catch internally, never throws, never fails the webhook.
+ */
+export async function sendAdminPaymentNotification(
+  args: AdminPaymentNotificationArgs
+): Promise<void> {
+  const key = process.env.SENDGRID_API_KEY;
+  if (!key) {
+    console.warn("[sendgrid] admin payment notify skipped: no SENDGRID_API_KEY");
+    return;
+  }
+  if (!args.to) {
+    console.warn("[sendgrid] admin payment notify skipped: no recipient");
+    return;
+  }
+
+  const who = args.customerName || args.customerEmail;
+  const text = [
+    `New payment from ${who}`,
+    `Email: ${args.customerEmail}`,
+    `Session: ${args.sessionId}`,
+  ].join("\n");
+
+  try {
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: args.to }] }],
+        from: { email: FROM_EMAIL, name: FROM_NAME },
+        subject: "Replicant — New Payment",
+        content: [{ type: "text/plain", value: text }],
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.warn("[sendgrid] admin payment notify non-OK", { status: res.status, body });
+    } else {
+      console.log("[sendgrid] admin payment notify sent", { to: args.to });
+    }
+  } catch (e: any) {
+    console.warn("[sendgrid] admin payment notify error", e?.message || e);
+  }
+}

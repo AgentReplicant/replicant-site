@@ -1,13 +1,18 @@
 // app/api/stripe/webhook/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import {
+  findLeadByEmailOrPhone,
+  upsertLead,
+} from "@/lib/airtable/leads";
+import { sendAdminPaymentNotification } from "@/lib/email/sendgrid";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
  * Stripe client
- * (keeping your current pinned version per your setup)
+ * (keeping current pinned version per setup)
  */
 function getStripe() {
   return new Stripe(process.env.STRIPE_SECRET_KEY as string, {
@@ -50,22 +55,44 @@ export async function POST(req: NextRequest) {
         const s = event.data.object as Stripe.Checkout.Session;
 
         const email =
-          s.customer_details?.email || s.customer_email || "" /* required to upsert */;
+          s.customer_details?.email || s.customer_email || "";
         const name = s.customer_details?.name || "";
+        const phone = s.customer_details?.phone || "";
         const stripeSessionId = s.id;
 
-        await upsertLeadPaid({
-          email,
-          name,
-          stripeSessionId,
-        });
+        // Required for Airtable upsert (lookup key)
+        if (!email) {
+          console.warn("[stripe webhook] checkout.session.completed without email; skipping Airtable upsert");
+          break;
+        }
 
-        // Optional admin heads-up
-        await maybeSendEmail({
-          to: process.env.ADMIN_NOTIFY_EMAIL,
-          subject: "Replicant — New Payment",
-          text: `New payment from ${name || email}\nSession: ${stripeSessionId}`,
-        });
+        // Idempotency guard: if a lead already exists with this StripePaymentId, skip the upsert.
+        // Stripe retries webhooks on non-2xx responses; this avoids redundant PATCHes.
+        const existing = await findLeadByEmailOrPhone({ email });
+        const alreadyProcessed =
+          existing?.fields?.StripePaymentId === stripeSessionId;
+
+        if (!alreadyProcessed) {
+          await upsertLead({
+            email,
+            name: name || undefined,
+            phone: phone || undefined,
+            source: "Stripe",
+            status: "Won",
+            stripePaymentId: stripeSessionId,
+          });
+
+          // Admin heads-up (best-effort, never fails the webhook).
+          // Inside the idempotency block so Stripe retries don't duplicate admin emails.
+          await sendAdminPaymentNotification({
+            to: process.env.ADMIN_NOTIFY_EMAIL || "",
+            customerName: name || undefined,
+            customerEmail: email,
+            sessionId: stripeSessionId,
+          });
+        } else {
+          console.info("[stripe webhook] already processed, skipping upsert + admin notify", { stripeSessionId });
+        }
 
         break;
       }
@@ -79,117 +106,5 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     console.error("Webhook handling error:", e);
     return NextResponse.json({ ok: false, error: e?.message }, { status: 500 });
-  }
-}
-
-/* ------------------------------ Airtable I/O ------------------------------ */
-
-async function upsertLeadPaid({
-  email,
-  name,
-  stripeSessionId,
-}: {
-  email?: string;
-  name?: string;
-  stripeSessionId?: string;
-}) {
-  const token = process.env.AIRTABLE_TOKEN;
-  const baseId = process.env.AIRTABLE_BASE_ID;
-  const table = process.env.AIRTABLE_TABLE_NAME || "Leads";
-
-  if (!token || !baseId || !email) return;
-
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-
-  // Find by email (case-insensitive)
-  const findUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(
-    table
-  )}?filterByFormula=${encodeURIComponent(
-    `LOWER({Email})="${email.toLowerCase()}"`
-  )}&maxRecords=1`;
-
-  const list = await fetch(findUrl, { headers, cache: "no-store" }).then((r) =>
-    r.json()
-  );
-
-  if (list.records?.[0]) {
-    // Idempotency guard: skip if this session already processed
-    if (list.records[0].fields?.StripePaymentId === stripeSessionId) return;
-
-    // PATCH existing
-    await fetch(
-      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}/${list.records[0].id}`,
-      {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({
-          fields: {
-            Status: "Won",
-            StripePaymentId: stripeSessionId || "",
-            Source: "Stripe", // <- normalized title-case
-          },
-          typecast: true,
-        }),
-      }
-    );
-  } else {
-    // CREATE new
-    await fetch(
-      `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          records: [
-            {
-              fields: {
-                Name: name || "",
-                Email: email,
-                Status: "Won",
-                StripePaymentId: stripeSessionId || "",
-                Source: "Stripe", // <- normalized title-case
-              },
-            },
-          ],
-          typecast: true,
-        }),
-      }
-    );
-  }
-}
-
-/* ------------------------------ SendGrid notify ------------------------------ */
-
-async function maybeSendEmail({
-  to,
-  subject,
-  text,
-}: {
-  to?: string | null;
-  subject: string;
-  text: string;
-}) {
-  const key = process.env.SENDGRID_API_KEY;
-  if (!key || !to) return;
-
-  try {
-    await fetch("https://api.sendgrid.com/v3/mail/send", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: to }] }],
-        from: { email: "agentreplicant@gmail.com", name: "Replicant" },
-        subject,
-        content: [{ type: "text/plain", value: text }],
-      }),
-    });
-  } catch (e) {
-    console.warn("SendGrid notify skipped/error:", e);
   }
 }

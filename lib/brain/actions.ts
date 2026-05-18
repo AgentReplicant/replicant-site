@@ -22,11 +22,3 @@ export async function bookSlot(args: {
 }) {
   return await bookAndConfirmPhoneCall(args);
 }
-
-export function getCheckoutLink(): { url: string } {
-  const url =
-    process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK ||
-    process.env.STRIPE_PAYMENT_LINK;
-  if (!url) throw new Error("Payment link not configured");
-  return { url };
-}
