@@ -131,7 +131,7 @@
 - No "Buy Now" buttons added to homepage / pricing / audit / chat
 - Riley continues to route via Marlon: "Once scope is confirmed, Marlon can send over the payment link"
 
-### Phase 6 â€” Returning-User Memory âœ…
+### Phase 6 — Returning-User Memory ✅
 - New shared type: `LeadProfile` (subset of LeadPayload safe to surface to brain; includes `status` for gating only, never spoken)
 - `lib/airtable/leads.ts` adds `toLeadProfile()` mapper + `USEFUL_STATUSES` set
 - Chat API route does Airtable lookup server-side via shared adapter; brain stays IO-free
@@ -180,10 +180,6 @@
 - React state race in opportunistic capture: combining "my email is..." + new question in ONE message sends `email: undefined` in chat payload because `setEmail` hasn't flushed yet. Phase 6 welcome-back doesn't fire on that turn. Fix: send `effectiveEmail`/`effectivePhone` (current state || new extract) in chat request body, same pattern Phase 3B used for `/api/lead`.
 - Bare-number slot picker ambiguity: typing `5` when offered 4:30/5:30/6:00 picks 4:30. Improve `selectSlotFromUserText` to prefer exact `:00` match over nearest `:30`.
 - Verify Phase 6 qualification-seed-skip: if profile has fully populated qualification fields, qualification should jump straight to recommendation on first trigger. Confirm by inspecting `Main Goal` and other fields on a seeded Airtable row and testing.
-- Commit `scripts/*.mjs` as `chore: add airtable schema migration/dump scripts`
-- Delete stray `C:\Users\Marlon Lorenzana\package-lock.json` (outside repo, causes Next.js workspace-root warning)
-- Remove `GOOGLE_SA_IMPERSONATE` env var from Vercel (no longer used by code)
-- Remove `STRIPE_PAYMENT_LINK` env var from Vercel (no longer used by code)
 - `NEXT_PUBLIC_STRIPE_PAYMENT_LINK` is legacy — only `app/cancel/page.tsx` reads it
 - `app/cancel/page.tsx` and `app/onboarding/` should eventually be revisited
 - Optional: scrub `sa.json` from git history via `git filter-repo` (key already rotated, so not security-critical)
