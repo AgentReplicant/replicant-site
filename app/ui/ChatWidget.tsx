@@ -379,10 +379,16 @@ export default function ChatWidget() {
     setMessages((m) => [...m, { role: "user", text }]);
     historyRef.current.push({ role: "user", content: text });
     void logMessage("user", text);
-    // Skip opportunistic lead capture if we're in the email-handoff state —
-    // the handoff handler will write the lead with the correct source/status,
-    // and we'd otherwise race two writes to Airtable.
-    if (pending !== "email_handoff") {
+    // Skip opportunistic lead capture during:
+    // - email_handoff: handoff handler writes with the correct source/status; we'd race two writes
+    // - phone / email: booking flow. Phone is collected first, email second. Opportunistic capture
+    //   during these steps creates phone-only orphan rows and stale-state races. The "booked" branch
+    //   fires a single explicit upsert with both contacts after the booking succeeds.
+    if (
+      pending !== "email_handoff" &&
+      pending !== "phone" &&
+      pending !== "email"
+    ) {
       void maybeUpsertLeadFromText(text);
     }
   }
@@ -536,9 +542,38 @@ export default function ChatWidget() {
       setLastSlots(null);
       setChosenSlot(null);
       setPending(null);
+
+      // Phase 6.1: explicit post-booking lead upsert.
+      // During pending=phone/email opportunistic capture is suppressed, so the booking flow's
+      // contact info is written here in a single upsert with BOTH phone + email.
+      // Best-effort: never fails the booking confirmation.
+      try {
+        const qualFields: Record<string, string> = {};
+        if (qualification.businessCategory) qualFields.businessCategory = qualification.businessCategory;
+        if (qualification.mainGoal) qualFields.mainGoal = qualification.mainGoal;
+        if (qualification.desiredTimeline) qualFields.desiredTimeline = qualification.desiredTimeline;
+        if (qualification.budgetRange) qualFields.budgetRange = qualification.budgetRange;
+        if (qualification.recommendedPackage) qualFields.recommendedPackage = qualification.recommendedPackage;
+        const hasQualFields = Object.keys(qualFields).length > 0;
+
+        if (email && phone) {
+          await fetch("/api/lead", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: name || undefined,
+              email,
+              phone,
+              source: "Chat - Replicant",
+              ...(hasQualFields ? { ...qualFields, interestType: "Website" } : {}),
+            }),
+          });
+        }
+      } catch {}
+
       const confirmation = data.when
-        ? `All set for ${data.when}. We'll call you at the number you provided. A confirmation email is on its way.`
-        : "All set. We'll call you at the number you provided. A confirmation email is on its way.";
+        ? `All set for ${data.when}. We'll call you at the number you provided.`
+        : "All set. We'll call you at the number you provided.";
       appendBot(confirmation);
       return;
     }
