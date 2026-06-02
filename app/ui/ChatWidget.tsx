@@ -474,7 +474,10 @@ export default function ChatWidget() {
     return null;
   }
 
-  async function handleBrainResult(data: any) {
+  async function handleBrainResult(
+    data: any,
+    overrideContacts?: { email?: string; phone?: string }
+  ) {
     if (data?.email) setEmail(data.email);
 
     // Phase 6: Brain signaled returning-user greeting was delivered.
@@ -556,14 +559,19 @@ export default function ChatWidget() {
         if (qualification.recommendedPackage) qualFields.recommendedPackage = qualification.recommendedPackage;
         const hasQualFields = Object.keys(qualFields).length > 0;
 
-        if (email && phone) {
+        // Phase 6.1 fix: prefer fresh override values over React-state, which
+        // may be stale within the same render cycle that called setEmail/setPhone.
+        const effectiveEmail = overrideContacts?.email || email;
+        const effectivePhone = overrideContacts?.phone || phone;
+
+        if (effectiveEmail && effectivePhone) {
           await fetch("/api/lead", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               name: name || undefined,
-              email,
-              phone,
+              email: effectiveEmail,
+              phone: effectivePhone,
               source: "Chat - Replicant",
               ...(hasQualFields ? { ...qualFields, interestType: "Website" } : {}),
             }),
@@ -712,7 +720,9 @@ export default function ChatWidget() {
           name: name || undefined,
         };
         const booked = await callBrain({ pickSlot });
-        await handleBrainResult(booked);
+        // Phase 6.1 fix: pass fresh contacts as override since setEmail(val) above
+        // hasn't flushed to closure-captured `email` by the time handleBrainResult runs.
+        await handleBrainResult(booked, { email: val, phone });
       } finally {
         setBusy(false);
       }
