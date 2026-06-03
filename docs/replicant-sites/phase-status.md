@@ -1,6 +1,6 @@
 # Replicant Sites — Phase Status
 
-**Last updated:** May 17, 2026 (Phase 5D shipped)
+**Last updated:** June 2, 2026 (Phase 6.1 + 7A shipped)
 
 ## Done
 
@@ -126,8 +126,8 @@
 - Idempotency guard (`alreadyProcessed`) skips both Airtable upsert AND admin notification on Stripe retries
 - Dead `getCheckoutLink` removed from `lib/brain/actions.ts`
 - Stripe signature verification preserved (raw body buffer + `constructEvent`)
-- `docs/replicant-sites/payments.md` created â€” documents post-scope payment positioning, recommended flow, Riley's allowed language, env vars, Source overwrite caveat
-- Stripe remains POST-scope payment collection only â€” no public self-checkout
+- `docs/replicant-sites/payments.md` created — documents post-scope payment positioning, recommended flow, Riley's allowed language, env vars, Source overwrite caveat
+- Stripe remains POST-scope payment collection only — no public self-checkout
 - No "Buy Now" buttons added to homepage / pricing / audit / chat
 - Riley continues to route via Marlon: "Once scope is confirmed, Marlon can send over the payment link"
 
@@ -149,13 +149,42 @@
 - Internal CRM status never spoken in user-facing copy
 - 7 acceptance tests passed end-to-end on live
 
+### Phase 6.1 — Booking CRM stability fixes ✅
+- Opportunistic `/api/lead` capture suppressed during `pending=phone` and `pending=email` (booking flow) in addition to existing `email_handoff` guard
+- Single explicit post-booking upsert in `handleBrainResult` "booked" branch with both phone + email + qualification fields (best-effort, never fails the booking confirmation)
+- `handleBrainResult` accepts optional `overrideContacts` param; the `pending === "email"` branch passes `{ email: val, phone }` so the upsert uses fresh values instead of closure-captured stale React state
+- Riley no longer promises "A confirmation email is on its way" in the booking confirmation (SendGrid still wired, just silent — credits issue unresolved)
+- Three live tests passed: fresh email + fresh phone (new row), fresh email + reused phone (existing row updated), reused email + fresh phone (existing row updated, Qualified status preserved)
+- Calendar event creation unchanged; SendGrid adapter code untouched
+
+### Phase 7A — Local-service template scaffold ✅
+- `templates/local-service/` at repo root — internal-only reusable starter for service-business client sites
+- Not routed by Next.js (lives outside `app/`); not part of `replicantapp.com`
+- 9 section components: Hero, Services, Gallery (grid or before/after), WhyChooseUs, HowItWorks, Pricing, Reviews, FAQ, Contact
+- Content-driven via single typed `LocalServiceContent` object in `types.ts`; empty sections hide automatically
+- Brand color is a CSS variable set on the page root via `style={{ "--brand": content.brand.primaryColor }}`; sections use Tailwind arbitrary values like `bg-[var(--brand)]`. Hover states use `hover:opacity-90` (CSS-var opacity modifiers are unreliable in Tailwind)
+- Two example content files (`content.example.barber.ts`, `content.example.detailing.ts`) clearly labeled as fictional — NOT proof
+- Anchor tags in `Hero.tsx` and `Contact.tsx` use `React.createElement` to dodge clipboard angle-bracket corruption (workflow rule)
+- `Contact.tsx` `ctaLink` uses `target="_blank"` only for external `https://` URLs — local in-page anchors like `#contact` open in same tab
+- README documents the copy-out workflow: copy template into a new Next.js project, edit `content.ts`, deploy as a separate Vercel project with the client's domain
+- Tailwind-only styling; no extra CSS files; no Airtable integration; no Riley chat widget embedded (future Phase 9)
+
+### Phase 7A — Category audit ✅
+- Audited every `Home & Trade Services` reference across code + docs (8 production files + 3 doc files)
+- Decision: do NOT rename `Home & Trade Services` to `Local & Trade Services` or split it
+- Reason: car detailing is functionally supported today — Riley's regex already matches `detail`, `categories.tsx:24` already mentions "mobile detailing", the generic template works across barber + detailing without category changes
+- Rename would require Airtable schema migration + 8 file edits; benefit is purely cosmetic at this point
+- Revisit only if 2+ car-detailing leads create real friction
+
 ---
 
 ## Open / Next
 
-### Phase 7 — Barber Friend Beta Site (NEXT — waiting on assets)
+### Phase 7 — First Beta Site (NEXT — waiting on assets)
 - First proof-of-product website
+- Beta Client #1 is whichever friend delivers content first (barber or car detailing — both compatible with the Phase 7A template)
 - Real client, real content, real launch
+- Engineering side unblocked by Phase 7A; only blocked on client assets
 
 ### Phase 8 — `/websites` page with proof
 - After Phase 7
@@ -176,12 +205,13 @@
 
 ## Small follow-ups (not blocking phases)
 
-- Fix SendGrid credits/plan or swap provider; confirmation emails are wired but currently fail due to account credit limit
-- React state race in opportunistic capture: combining "my email is..." + new question in ONE message sends `email: undefined` in chat payload because `setEmail` hasn't flushed yet. Phase 6 welcome-back doesn't fire on that turn. Fix: send `effectiveEmail`/`effectivePhone` (current state || new extract) in chat request body, same pattern Phase 3B used for `/api/lead`.
+- **SendGrid credits** still blocked (`401 Maximum credits exceeded`). Booking still works; confirmation emails fail silently. Fix credits/plan or swap providers. Phase 6.1 already removed Riley's "confirmation email is on its way" promise so this no longer creates a trust gap, just a missed UX nicety.
+- **React stale-state pattern, generalized.** Phase 6.1 fixed this specifically for the booking flow via `overrideContacts` on `handleBrainResult`. The same pattern still applies to opportunistic capture in chat payloads: combining "my email is..." + a new question in ONE message sends `email: undefined` because `setEmail` hasn't flushed yet. Phase 6 welcome-back doesn't fire on that turn. Fix: send `effectiveEmail`/`effectivePhone` (current state || new extract) in chat request body, same pattern.
 - Bare-number slot picker ambiguity: typing `5` when offered 4:30/5:30/6:00 picks 4:30. Improve `selectSlotFromUserText` to prefer exact `:00` match over nearest `:30`.
 - Verify Phase 6 qualification-seed-skip: if profile has fully populated qualification fields, qualification should jump straight to recommendation on first trigger. Confirm by inspecting `Main Goal` and other fields on a seeded Airtable row and testing.
+- **Airtable test row dedup.** At least one pre-existing duplicate phone in test data (rows 18 + 61 both `(555) 987-8899` — caught during Phase 6.1 Test B). Cleanup needed before going live with real leads to avoid confusion when a real phone happens to collide with a stale test row.
+- **Adapter `maxRecords=1` behavior worth documenting.** When multiple Airtable rows share a contact (email or phone), `findLeadByEmailOrPhone` only matches the first one. Not a bug — but worth noting in `architecture.md` §4 (Lead flow / Adapter rules) so future-us doesn't get surprised.
 - `NEXT_PUBLIC_STRIPE_PAYMENT_LINK` is legacy — only `app/cancel/page.tsx` reads it
 - `app/cancel/page.tsx` and `app/onboarding/` should eventually be revisited
 - Optional: scrub `sa.json` from git history via `git filter-repo` (key already rotated, so not security-critical)
 - Email handoff strict regex could use `EMAIL_EXTRACT_RE` for symmetry with opportunistic capture (low priority, working acceptably)
-- Airtable test row cleanup: delete duplicate/orphan rows from Phase 3B/6 testing (specific row IDs in operator notes)
