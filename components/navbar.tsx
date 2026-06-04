@@ -18,8 +18,12 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-white/10 bg-black/60 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <a href="/" className="text-lg font-semibold tracking-tight">
-          Replicant
+        <a href="/" className="flex items-center" aria-label="Replicant home">
+          <img
+            src="/brand/replicant-logo-white-transparent.png"
+            alt="Replicant"
+            className="h-7 w-auto"
+          />
         </a>
 
         {/* Desktop links */}
