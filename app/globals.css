@@ -35,3 +35,9 @@ option {
   background-size: 60px 60px;
   background-repeat: repeat;
 }
+
+/* When users click in-page anchor links (#problem, #pricing, etc.),
+   give the section room to clear the sticky navbar (~52px content + padding). */
+section[id] {
+  scroll-margin-top: 80px;
+}
