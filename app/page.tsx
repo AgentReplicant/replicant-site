@@ -15,34 +15,36 @@ export default function HomePage() {
     <>
       <Hero />
 
-      <section id="problem" className="py-16 md:py-28">
+      {/* Problem sits directly under hero — small top padding to keep the
+          hero→problem transition tight; the hero already fades to bg. */}
+      <section id="problem" className="pt-4 pb-12 md:pt-8 md:pb-20">
         <Problem />
       </section>
 
-      <section id="websites" className="py-16 md:py-28">
+      <section id="websites" className="py-12 md:py-20">
         <Categories />
       </section>
 
-      <section id="what-we-build" className="py-16 md:py-28">
+      <section id="what-we-build" className="py-12 md:py-20">
         <Features />
       </section>
 
-      <section id="how-it-works" className="py-16 md:py-28">
+      <section id="how-it-works" className="py-12 md:py-20">
         <HowItWorks />
       </section>
 
-      <section id="pricing" className="py-16 md:py-28">
+      <section id="pricing" className="py-12 md:py-20">
         <Pricing />
       </section>
 
-      <section id="ai-assistants" className="py-16 md:py-28">
+      <section id="ai-assistants" className="py-12 md:py-20">
         <AIAssistants />
       </section>
 
       {/* GetStarted renders its own <section id="get-started"> */}
       <GetStarted />
 
-      <section id="faq" className="py-16 md:py-28">
+      <section id="faq" className="py-12 md:py-20">
         <FAQ />
       </section>
 
