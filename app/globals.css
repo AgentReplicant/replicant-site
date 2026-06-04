@@ -27,3 +27,11 @@ option {
   background-color: #0B0E12;
   color: #ffffff;
 }
+
+/* Hero background grid pattern. Decorative, pointer-events disabled at the
+   element level. SVG data URI keeps it dependency-free and zero-byte network. */
+.hero-grid-bg {
+  background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%2760%27%20height%3D%2760%27%20viewBox%3D%270%200%2060%2060%27%3E%3Cpath%20d%3D%27M60%200H0V60%27%20fill%3D%27none%27%20stroke%3D%27%23ffffff%27%20stroke-opacity%3D%270.06%27%20stroke-width%3D%271%27%2F%3E%3C%2Fsvg%3E");
+  background-size: 60px 60px;
+  background-repeat: repeat;
+}
