@@ -1,6 +1,6 @@
 # Replicant Sites — Phase Status
 
-**Last updated:** June 2, 2026 (Phase 6.1 + 7A shipped)
+**Last updated:** June 4, 2026 (Phase 7B brand + visual polish shipped)
 
 ## Done
 
@@ -176,6 +176,19 @@
 - Rename would require Airtable schema migration + 8 file edits; benefit is purely cosmetic at this point
 - Revisit only if 2+ car-detailing leads create real friction
 
+### Phase 7B — Brand + Visual Polish ✅
+- **Brand assets wired** (`d44c6b9`): `public/favicon.ico` (auto-detected by Next.js App Router, no metadata changes needed), `public/brand/` directory with 5 logo variants. Navbar text "Replicant" replaced with `/brand/replicant-logo-white-transparent.png` (`h-7 w-auto`, transparent on dark header, `alt="Replicant"` fallback, `aria-label="Replicant home"` on the anchor). Plain `<img>` tag, not `next/image`, since the project didn't use it elsewhere.
+- **Hero redesign** (`ad12231`): two-column layout on `lg+` — existing headline/sub/CTAs unchanged on the left, decorative browser-mockup card on the right with floating Riley chat bubble (lower-left) and "NEW LEAD CAPTURED / Booking requested" success card (upper-right, animate-ping green dot). Mockup is pure static composition — no state, no inputs, no API calls, no fake proof. Hidden below `lg` to keep mobile CTAs above the fold. Aria-hidden as decorative furniture.
+- **Hero background depth** (`ad12231` + `0ae3cfa`): subtle cyan/blue radial glow upper-right, faint 60px SVG grid pattern (`.hero-grid-bg` helper in `app/globals.css`, ~6% opacity white lines, repeating data URI, zero network requests), 128px fade-to-background at the bottom edge to smooth the transition into the Problem section. All decorative layers are `pointer-events-none` and `aria-hidden`.
+- **CTA workaround applied to hero** (`ad12231`): primary + secondary CTAs use `React.createElement` with `PRIMARY_CTA_CLASS` / `SECONDARY_CTA_CLASS` constants to dodge clipboard angle-bracket corruption (workflow rule, same pattern as `templates/local-service/components/Hero.tsx` and `Contact.tsx`).
+- **Problem section icons** (`27f0c47`): mirrored Categories/Features icon-tile pattern (cyan-to-teal gradient `from-[#4E77FF] to-[#00DBAA]`, `h-11 w-11` rounded square, `lucide-react` icons: `Search`, `MapPin`, `ShieldCheck`, `Bot`). Each card now has a title + description instead of a single sentence; same 4 conceptual points, restructured to match the surrounding sections. Card primitive from `@/components/ui/card`, motion stagger preserved. Softened "whether you're even still in business" → "whether your business is still active" per copy review.
+- **Section rhythm pass 1** (`27f0c47`): `app/page.tsx` wrappers tightened from `py-16 md:py-28` to `py-12 md:py-20`. Problem section gets even tighter `pt-4 pb-12 md:pt-8 md:pb-20` since hero already fades into it. Cuts ~224px of vertical padding per section boundary on desktop.
+- **Section rhythm pass 2** (`9b65344`): removed double-padding on Features (`features.tsx`) and HowItWorks (`howitworks.tsx`) — both had their own `py-16 md:py-24` on top of the wrapper. Internal `<section className="py-16 md:py-24">` reduced to `<section>` so they inherit only the wrapper's rhythm.
+- **Anchor-jump safety** (`9b65344`): added global CSS rule `section[id] { scroll-margin-top: 80px; }` in `app/globals.css` so in-page anchor clicks (`#problem`, `#pricing`, etc.) land below the sticky navbar (~52px content + breathing room) without affecting normal scroll.
+- **Tailwind v4 fractional opacity fix** (`ad12231`): `bg-white/8` doesn't work in Tailwind v4 (not a standard step). Use bracket notation `bg-white/[0.08]`. Applied in hero mockup.
+- **Tailwind v4 `@theme` editor warning**: VS Code's CSS linter reports `Unknown at rule @theme` (cosmetic only — Tailwind v4's PostCSS plugin processes `@theme inline` correctly). Optional fix: `.vscode/settings.json` with `"css.lint.unknownAtRules": "ignore"`. Not pursued; build is clean.
+- **macOS case-collision note**: `ls components/` shows both `navbar.tsx` and `Navbar.tsx` due to case-insensitive filesystem, but `git ls-files` confirms only the lowercase is tracked. Do NOT `rm components/Navbar.tsx` on macOS — the path can resolve to the tracked inode and silently delete the real file.
+
 ---
 
 ## Open / Next
@@ -210,7 +223,6 @@
 - Bare-number slot picker ambiguity: typing `5` when offered 4:30/5:30/6:00 picks 4:30. Improve `selectSlotFromUserText` to prefer exact `:00` match over nearest `:30`.
 - Verify Phase 6 qualification-seed-skip: if profile has fully populated qualification fields, qualification should jump straight to recommendation on first trigger. Confirm by inspecting `Main Goal` and other fields on a seeded Airtable row and testing.
 - **Airtable test row dedup.** At least one pre-existing duplicate phone in test data (rows 18 + 61 both `(555) 987-8899` — caught during Phase 6.1 Test B). Cleanup needed before going live with real leads to avoid confusion when a real phone happens to collide with a stale test row.
-- **Adapter `maxRecords=1` behavior worth documenting.** When multiple Airtable rows share a contact (email or phone), `findLeadByEmailOrPhone` only matches the first one. Not a bug — but worth noting in `architecture.md` §4 (Lead flow / Adapter rules) so future-us doesn't get surprised.
 - `NEXT_PUBLIC_STRIPE_PAYMENT_LINK` is legacy — only `app/cancel/page.tsx` reads it
 - `app/cancel/page.tsx` and `app/onboarding/` should eventually be revisited
 - Optional: scrub `sa.json` from git history via `git filter-repo` (key already rotated, so not security-critical)
