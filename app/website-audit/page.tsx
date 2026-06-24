@@ -17,10 +17,9 @@ export default function WebsiteAuditPage() {
             Request Your Free Website Audit
           </h1>
           <p className="mt-5 text-base sm:text-lg text-white/70 leading-relaxed">
-            Tell us about your business, your current online presence, and what
-            you want more of — bookings, calls, consultations, or quote
-            requests. We'll review and send back a clear, honest take on what
-            we'd improve.
+            A guided, one-question-at-a-time intake for service businesses.
+            Answer what you can, skip what you do not know, and we will review
+            the whole picture from there.
           </p>
         </div>
       </section>
@@ -32,8 +31,8 @@ export default function WebsiteAuditPage() {
           </div>
 
           <p className="mt-6 text-xs text-white/50 text-center">
-            We'll only use this info to follow up about your audit. No spam, no
-            list-selling, no nonsense.
+            We will only use this info to follow up about your audit. No spam,
+            no list-selling, no nonsense.
           </p>
         </div>
       </section>
