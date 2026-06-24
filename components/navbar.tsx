@@ -34,7 +34,7 @@ export default function Navbar() {
             </a>
           ))}
           <a
-            href="/get-started"
+            href="/website-audit"
             className="inline-flex items-center rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-medium text-white hover:shadow-lg transition"
           >
             Get Started
@@ -66,7 +66,7 @@ export default function Navbar() {
               </a>
             ))}
             <a
-              href="/get-started"
+              href="/website-audit"
               className="mt-2 inline-flex items-center justify-center rounded-lg bg-sky-500 px-3 py-2 text-sm font-medium text-white hover:shadow-lg transition"
               onClick={() => setOpen(false)}
             >

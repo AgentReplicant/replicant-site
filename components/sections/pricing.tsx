@@ -63,8 +63,8 @@ const tiers: Tier[] = [
       "Human handoff",
       "Conversation logs",
     ],
-    cta: "Ask About Assistant Add-Ons",
-    ctaHref: "/get-started",
+    cta: "Get a Free Website Audit",
+    ctaHref: "/website-audit",
     highlighted: false,
   },
 ];

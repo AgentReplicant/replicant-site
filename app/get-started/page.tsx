@@ -3,7 +3,7 @@ import { useEffect } from "react";
 
 export default function GetStartedCompat() {
   useEffect(() => {
-    window.location.replace("/#get-started");
+    window.location.replace("/website-audit");
   }, []);
   return null;
 }

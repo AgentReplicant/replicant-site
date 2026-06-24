@@ -42,10 +42,10 @@ export default function AIAssistants() {
 
             <div className="mt-8">
               <a
-                href="/get-started"
+                href="/website-audit"
                 className="inline-flex items-center justify-center rounded-lg bg-sky-500 px-4 py-2 text-white font-medium shadow hover:shadow-lg transition"
               >
-                Ask About Assistant Add-Ons
+                Start Free Website Audit
               </a>
             </div>
           </div>
